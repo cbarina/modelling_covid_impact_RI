@@ -250,6 +250,7 @@ intervals.
 
 res <- forecasts %>%
   left_join(x) %>%
+  filter(year == 2020) %>% 
   mutate(delta = coverage - mean,
          lower_delta = coverage - lower_ci,
          upper_delta = coverage - upper_ci,
@@ -264,63 +265,38 @@ res <- forecasts %>%
 ### Plot coverage timeseries for paper
 
 ```{r, message = FALSE, warning = FALSE, results = "hide", fig.keep = 1}
+
 # Select countries for inclusion in plot
 large_pops <- c("China", "India", "Pakistan", "Nigeria")
 
-# Select 2000-2019 historic WUENIC data and ARIMA-modelled 2020 coverage
-plot_dat <- output %>%
-  filter(country %in% large_pops) %>%
-  dplyr::select(country, iso_code, year, coverage, plot_key,
-                predicts_lower, predicts_upper) %>%
-  mutate(date = year, year = year(date))
+x_large <- x %>%
+  filter(country %in% large_pops)
 
-plot_dat_historic <- plot_dat %>%
-  filter(plot_key == "Historic")
-
-plot_dat_forecast <- plot_dat %>%
-  filter(plot_key == "Forecast")
-
-## # Combine historic, modelled, and actuals for full dataset for generating plot
-## pop_comb <- pop_dat %>%
-##   rbind(pop_dat_2020) %>%
-##   mutate(shape = ifelse(plot_key == "Actuals", 4, 19))
+res_large <- res %>%
+  filter(country %in% large_pops)
 
 # Generate plot
-pop_vis <-
+arima_color <- "#ac3973"
 
-  ggplot(data = plot_dat, aes(x = year, y = coverage, color = plot_key)) +
-  geom_point() +
-  geom_line() +
-  geom_errorbar(aes(ymin = predicts_lower, ymax = predicts_upper)) + 
-  facet_wrap(~ country, ncol = 4, scales = "free_y", labeller = label_wrap_gen(25))
-  
-  geom_point(data = cov_forecast, aes(x = ))
-  geom_point(data = pop_dat_2020, aes(x = year(year), y = coverage, color = plot_key), shape = 4) +
-  labs(title = "WUENIC reported coverage 2000-2019 and ARIMA-modelled expected 2020 coverage", 
-       y = "Coverage (%)",
-       x = "Year") +
+pop_vis <-
+  ggplot(data = x_large, aes(x = year, y = coverage)) +
   theme_bw() +
-  theme(legend.position = 'bottom', 
-        legend.text = element_text(size = 14),
-        legend.spacing = unit(0.05, 'cm'),
-        plot.title = element_text(face = "bold", size = 18),
-        legend.title = element_text(face = "bold", size = 16),
-        axis.text.x = element_text(angle=45,hjust = 1, size = 14),
+  geom_point(alpha = 0.8) +
+  geom_line(alpha = 0.3) +
+  geom_errorbar(data = res_large, aes(ymin = lower_ci, ymax = upper_ci),
+                color = arima_color) +
+  geom_point(data = res_large, aes(y = mean), shape = 3, color = arima_color) +
+  facet_wrap(~ country, ncol = 4, scales = "free_y", labeller = label_wrap_gen(25)) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1L), 
+                     limits = c(NA,1),
+                     n.breaks = 5) +
+  labs(y = "Coverage (%)",
+       x = "Year") +
+  theme(axis.text.x = element_text(angle=45,hjust = 1, size = 14),
         axis.text.y = element_text(size = 14), 
         strip.text.x = element_text(size = 14), 
-        axis.title = element_text(size = 18)) +
-  scale_colour_manual(name = "Datapoint:", 
-                      values = c("blue", "orange", "darkgrey"), 
-                      labels = c("WUENIC reported 2020 coverage",
-                                 "ARIMA modelled 2020 coverage",
-                                 "Historic WUENIC coverage"))+
-  guides(color = guide_legend(override.aes = list(shape = c(16, 16, 4),
-                                                  colour = c("darkgrey", "orange", "blue")),
-                              reverse=TRUE))+
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1L), 
-                     limits = c(0.25,1),
-                     n.breaks = 5) +
-  facet_wrap(~country, ncol = 4, scales = "fixed", labeller = label_wrap_gen(25))
+        axis.title = element_text(size = 18))
+ 
 pop_vis
 
 # Save file 
