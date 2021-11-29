@@ -262,9 +262,10 @@ res <- forecasts %>%
 
 ## Plot and visualise coverage timeseries
 
-### Plot coverage timeseries for paper
+This reproduces the figure from the paper using the 4 largest countries as an
+example of reported coverage values vs ARIMA model prediction.
 
-```{r, message = FALSE, warning = FALSE, results = "hide", fig.keep = 1}
+```{r, out.width = "100%, fig.width = 10}
 
 # Select countries for inclusion in plot
 large_pops <- c("China", "India", "Pakistan", "Nigeria")
@@ -278,15 +279,14 @@ res_large <- res %>%
 # Generate plot
 arima_color <- "#ac3973"
 
-pop_vis <-
-  ggplot(data = x_large, aes(x = year, y = coverage)) +
+pop_vis <- ggplot(data = x_large, aes(x = year, y = coverage)) +
   theme_bw() +
   geom_point(alpha = 0.8) +
   geom_line(alpha = 0.3) +
   geom_errorbar(data = res_large, aes(ymin = lower_ci, ymax = upper_ci),
                 color = arima_color) +
   geom_point(data = res_large, aes(y = mean), shape = 3, color = arima_color) +
-  facet_wrap(~ country, ncol = 4, scales = "free_y", labeller = label_wrap_gen(25)) +
+  facet_wrap(~ country, nrow = 1, scales = "free_y", labeller = label_wrap_gen(25)) +
   scale_y_continuous(labels = scales::percent_format(accuracy = 1L), 
                      limits = c(NA,1),
                      n.breaks = 5) +
@@ -303,55 +303,10 @@ pop_vis
 ggsave(filename = here::here(fig_folder, "forecast_pop.png"),
        plot = pop_vis, 
        width = 30, height = 10, units = "cm")
-```
-
-### Plot for all countries
-
-Output shown for 15 countries at a time - changeable by changing the paginate
-output:
-
-```{r, message = FALSE, warning = FALSE, results = "hide", fig.keep = 1}
-
-# Select 2020 WUENIC-reported actuals data
-plot_dat_key <- cov_2020 %>%
-  mutate(year = "2020-12-31") %>%
-  mutate(year = as.Date(year)) %>%
-  rename(coverage = actuals_2020) %>%
-  mutate(plot_key = "Actuals")
-
-# Select 2000-2019 historic WUENIC data and 2020 ARIMA forecast data, and combine with above
-plot_dat <- output %>%
-  dplyr::select(country, iso_code, year, coverage, plot_key) %>%
-  rbind(plot_dat_key) %>%
-  mutate(shape = ifelse(plot_key == "Actuals", 4, 19)) 
-
-# Generate plot - can change which countries visualised through changing page number in penultimate line
-vis = ggplot(data = plot_dat, aes(x = year(year), y = coverage, color = plot_key)) +
-  geom_point() +
-  geom_smooth(colour = "lightgrey") +
-  labs(title = "WUENIC reported coverage 2000-2019 and ARIMA-modelled expected 2020 coverage", 
-       y = "Coverage (%)",
-       x = "Year") +
-  theme_bw() +
-  theme(legend.position = 'bottom', 
-        legend.text = element_text(size = 10),
-        legend.spacing = unit(0.05, 'cm'),
-        legend.title = element_text(face = "bold"),
-        plot.title = element_text(face = "bold", size = 11),
-        axis.text.x = element_text(angle=45,hjust = 1)) +
-  scale_colour_manual(name = "Datapoint:", 
-                      values = c("blue", "orange", "darkgrey"), 
-                      labels = c("WUENIC reported 2020 coverage",
-                                 "ARIMA modelled 2020 coverage",
-                                 "Historic WUENIC coverage")) +
-  guides(color = guide_legend(reverse=TRUE)) +
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1L), 
-                     limits = c(0.3,1),
-                     n.breaks = 6) +
-  facet_wrap_paginate(~country, nrow = 3, ncol = 5, scales = "fixed", page = 3, labeller = label_wrap_gen(25))
-vis
 
 ```
+
+
 <br>
 
 ## Conduct t-tests for predicted vs. observed coverage
@@ -678,6 +633,7 @@ write.csv(
 ## Outputs including missed immunisation quantification
 
 ### Calculate missed immunisations
+
 - Import UNWPP data
 - Clean UNWPP data to calculate surviving infants in 2020 (target populations for DTP1 and DTP3 vaccination)
 - Calculation is: number of births - number of infants that die < age 1
