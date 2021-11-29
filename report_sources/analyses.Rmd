@@ -113,21 +113,21 @@ Steps taken:
 - select relevant columns only 
 
 ```{r}
-# Clean and reshape 2000-2019 coverage data
+
+# Clean and reshape 2000-2020 coverage data
 data_raw %<>%
   dplyr::rename(region = unicef_region, iso_code = iso3)
 
 data_long <- data_raw %>%
-  dplyr::select(-"2020") %>%
   pivot_longer(-(region:vaccine), names_to = "year", values_to = "coverage")
 names(data_long) <- tolower(names(data_long))
 data_long
 
-# Select and clean 2020 coverage data (actuals)
-cov_2020 <- data_raw %>%
-  dplyr::select(iso_code, country, '2020') %>%
-  dplyr::rename(actuals_2020 = '2020') %>%
-  mutate(actuals_2020 = actuals_2020 / 100)
+## # Select and clean 2020 coverage data (actuals)
+## cov_2020 <- data_raw %>%
+##   dplyr::select(iso_code, country, '2020') %>%
+##   dplyr::rename(actuals_2020 = '2020') %>%
+##   mutate(actuals_2020 = actuals_2020 / 100)
 
 # Join 'income' classification to main dataset
 income %<>% 
@@ -142,9 +142,8 @@ data_long
 
 # Clean consolidated projection dataset
 x <- data_long %>%
-  mutate(year = as.integer(year), coverage = coverage / 100) %>%
-  dplyr::select(-vaccine) %>%
-  dplyr::select(region, country, iso_code, income_group,year, coverage) %>%
+  mutate(coverage = coverage / 100) %>%
+  dplyr::select(region, country, iso_code, income_group, date, year, coverage) %>%
   arrange(country, year)
 x
 
@@ -255,7 +254,10 @@ output <- rbind(x, x2) %>%
          ARIMA_model = as.character(ARIMA_model),
          plot_key = ifelse(ARIMA_model != "WUENIC reported", "Forecast", "Historic"),
          predicts_lower = as.numeric(low_bound),
-         predicts_upper = as.numeric(upper_bound))
+         predicts_upper = as.numeric(upper_bound),
+         predicts_lower = if_else(predicts_lower < 0, 0, predicts_lower),
+         predicts_upper = if_else(predicts_upper > 1, 1, predicts_upper))
+         
 
 # set-up data for t-test conducted later
 ttest_2020 <- output %>%
@@ -290,6 +292,7 @@ cov_forecast %<>%
                                              "Lower middle income" = "LMIC",
                                              "Upper middle income" = "UMIC",
                                              "High income" = "HIC"))
+
 ```
 
 ## Plot and visualise coverage timeseries
@@ -301,28 +304,34 @@ cov_forecast %<>%
 large_pops <- c("China", "India", "Pakistan", "Nigeria")
 
 # Select 2000-2019 historic WUENIC data and ARIMA-modelled 2020 coverage
-pop_dat <- output %>%
+plot_dat <- output %>%
   filter(country %in% large_pops) %>%
-  dplyr::select(country, iso_code, year, coverage, plot_key)
+  dplyr::select(country, iso_code, year, coverage, plot_key,
+                predicts_lower, predicts_upper) %>%
+  mutate(date = year, year = year(date))
 
-# Select 2020 actuals WUENIC-reported data
-pop_dat_2020 <- cov_2020 %>%
-  filter(country %in% large_pops) %>%
-  mutate(year = "2020-12-31") %>%
-  mutate(year = as.Date(year)) %>%
-  rename(coverage = actuals_2020) %>%
-  mutate(plot_key = "Actuals")
+plot_dat_historic <- plot_dat %>%
+  filter(plot_key == "Historic")
 
-# Combine historic, modelled, and actuals for full dataset for generating plot
-pop_comb <- pop_dat %>%
-  rbind(pop_dat_2020) %>%
-  mutate(shape = ifelse(plot_key == "Actuals", 4, 19))
+plot_dat_forecast <- plot_dat %>%
+  filter(plot_key == "Forecast")
+
+## # Combine historic, modelled, and actuals for full dataset for generating plot
+## pop_comb <- pop_dat %>%
+##   rbind(pop_dat_2020) %>%
+##   mutate(shape = ifelse(plot_key == "Actuals", 4, 19))
 
 # Generate plot
-pop_vis <- ggplot(data = pop_dat, aes(x = year(year), y = coverage, color = plot_key)) +
+pop_vis <-
+
+  ggplot(data = plot_dat, aes(x = year, y = coverage, color = plot_key)) +
   geom_point() +
+  geom_line() +
+  geom_errorbar(aes(ymin = predicts_lower, ymax = predicts_upper)) + 
+  facet_wrap(~ country, ncol = 4, scales = "free_y", labeller = label_wrap_gen(25))
+  
+  geom_point(data = cov_forecast, aes(x = ))
   geom_point(data = pop_dat_2020, aes(x = year(year), y = coverage, color = plot_key), shape = 4) +
-  geom_smooth(colour = "darkgrey") +
   labs(title = "WUENIC reported coverage 2000-2019 and ARIMA-modelled expected 2020 coverage", 
        y = "Coverage (%)",
        x = "Year") +
