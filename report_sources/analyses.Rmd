@@ -165,16 +165,19 @@ x <- x %>%
   filter(year >= 2000, !is.na(coverage))
 
 # Filter for countries with complete data from 2000 to 2020
-sufficient_data <- x %>%
-  group_by(iso_code) %>%
-  dplyr::summarize(count = n()) %>%
-  filter(count >= 20) 
+complete_countries <- x %>%
+  count(iso_code) %>%
+  filter(n == 20) %>%
+  pull(iso_code)
 
 x %<>%
-  inner_join(sufficient_data, by = "iso_code") %>%
-  dplyr::select(-count) %>%
-  mutate(year = as.Date(ISOdate(as.numeric(year), 12, 31)))
+  filter(iso_code %in% complete_countries)
+
+# make artificial dates for TS modelling
+x %>% 
+  mutate(date = as.Date(sprintf("%s-12-31", year)))
 x
+
 ```
 
 ## Coverage modelling
