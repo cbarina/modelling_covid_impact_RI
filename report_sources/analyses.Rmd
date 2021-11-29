@@ -83,6 +83,7 @@ unwpp_raw <- file_path_unwpp_raw %>%
   tibble()
 
 unwpp_raw
+
 ```
 
 ### Set-up output folders
@@ -123,12 +124,6 @@ data_long <- data_raw %>%
 names(data_long) <- tolower(names(data_long))
 data_long
 
-## # Select and clean 2020 coverage data (actuals)
-## cov_2020 <- data_raw %>%
-##   dplyr::select(iso_code, country, '2020') %>%
-##   dplyr::rename(actuals_2020 = '2020') %>%
-##   mutate(actuals_2020 = actuals_2020 / 100)
-
 # Join 'income' classification to main dataset
 income %<>% 
   filter(datayear == "2020") %>%
@@ -142,10 +137,18 @@ data_long
 
 # Clean consolidated projection dataset
 x <- data_long %>%
-  mutate(coverage = coverage / 100) %>%
-  dplyr::select(region, country, iso_code, income_group, date, year, coverage) %>%
+  mutate(coverage = coverage / 100,
+         year = as.integer(year),
+         income_group = recode_factor(income_group,
+                                      "Low income" = "LIC",
+                                      "Lower middle income" = "LMIC",
+                                      "Upper middle income" = "UMIC",
+                                      "High income" = "HIC")        
+         ) %>%
+  select(region, country, iso_code, income_group, year, coverage) %>%
   arrange(country, year)
 x
+
 
 ```
 
@@ -160,23 +163,24 @@ We remove:
 - countries without data for the last 20 consecutive years
 
 ```{r}
+
 # Filter for data from 2000 onwards (inclusive)
 x <- x %>%
   filter(year >= 2000, !is.na(coverage))
 
-# Filter for countries with complete data from 2000 to 2020
+# Filter for countries with complete data from 2000 to 2020, i.e. 21 data points
 complete_countries <- x %>%
   count(iso_code) %>%
-  filter(n == 20) %>%
+  filter(n == 21) %>%
   pull(iso_code)
 
 x %<>%
   filter(iso_code %in% complete_countries)
 
-# make artificial dates for TS modelling
-x %>% 
-  mutate(date = as.Date(sprintf("%s-12-31", year)))
-x
+## # make artificial dates for TS modelling
+## x %>% 
+##   mutate(date = as.Date(sprintf("%s-12-31", year)))
+## x
 
 ```
 
@@ -196,13 +200,14 @@ and (b) predict 2020 coverage based on this selected model.
 ### Fit models
 
 ```{r}
-# OLD - to delete if new version works sufficiently
-# ts_df_old <- ts(reshape2::dcast(x, year ~ iso_code), start = 2000, freq = 1)
 
 # Reshape data to timeseries format
 ts_df <- x %>%
-  dplyr::select(year, iso_code, coverage) %>%
-  spread(iso_code, coverage) %>%
+  filter(year < 2020) %>% 
+  select(year, iso_code, coverage) %>%
+  pivot_wider(values_from = coverage, names_from = iso_code) %>%
+  arrange(year) %>%
+  select(-year) %>% 
   ts(start = 2000, freq = 1)
 
 # ARIMA forecast 2020 coverage from 2000-2019 data for all countries
@@ -210,91 +215,47 @@ ts_forecast <- lapply(ts_df,
                       function(y)
                         forecast(auto.arima(y, seasonal = FALSE), h = 1, level = 95))
 
-model <- as.data.frame(do.call(rbind, ts_forecast)) 
-model <- model[-1,]
-model <- setDT(model, keep.rownames = "iso_code")[]
-model %<>%
-  dplyr::select(iso_code, method, mean, lower, upper) 
+# extract forecasts and format output
+temp <- lapply(ts_forecast, as.data.frame)
+
+forecasts <- bind_rows(temp) %>%
+  mutate(iso_code = names(temp), mean = `Point Forecast`, lower_ci = `Lo 95`, upper_ci = `Hi 95`) %>%
+  tibble() %>%
+  select(iso_code, mean, lower_ci, upper_ci)
+forecasts
+
 ```
 
 Since WUENIC coverage is capped at 99% (i.e., no country can ever report 100%)
-we replace any 2020 estimates >99% to 99% coverage
+we replace any 2020 estimates >99% to 99% coverage; also make sure CI don't go
+below 0.
 
 ```{r}
-model %<>%
-  mutate(mean = ifelse(mean > 0.99, 0.99, mean))
+
+forecasts <- forecasts %>%
+  mutate(mean = if_else(mean > 0.99, 0.99, mean),
+         lower_ci = if_else(lower_ci < 0, 0, lower_ci),
+         upper_ci = if_else(upper_ci > 0.99, 0.99, upper_ci),)
+
 ```
 
 
-### Consolidate outputs with expected 2020 dataset
-We:
-- Combine forecast data with actuals to create full timeseries from 2000-2020 including reported and modelled 2020
-- Add in region and income group classifications for each country
-- Structure the data for further analyses (t-tests) and interim outputs
+### Add ARIMA predictions to the data
+
+Here we add the model prediction to the data, keeping only 2020, and calculate
+deltas (coverage values in 2020: reported - expected) and associated confidence
+intervals.
 
 ```{r}
-# Create list of ARIMA-modelled 2020 coverage values
-x2 <- x %>%
-  filter(year == '2000-12-31') %>%
-  dplyr::select(-coverage) %>%
-  mutate(year = '2020-12-31') %>%
-  inner_join(model, by = "iso_code") %>%
-  dplyr::rename(coverage = mean,
-                low_bound = lower,
-                upper_bound = upper,
-                ARIMA_model = method)
 
-# Tag current 2020 reported data as "WUENIC reported"
-x %<>%
-  mutate(ARIMA_model = "WUENIC reported",
-         low_bound = NA, 
-         upper_bound = NA)
-
-# Combine historic data and modeled data
-output <- rbind(x, x2) %>%
-  arrange(country, year) %>%
-  mutate(coverage = as.numeric(coverage),
-         ARIMA_model = as.character(ARIMA_model),
-         plot_key = ifelse(ARIMA_model != "WUENIC reported", "Forecast", "Historic"),
-         predicts_lower = as.numeric(low_bound),
-         predicts_upper = as.numeric(upper_bound),
-         predicts_lower = if_else(predicts_lower < 0, 0, predicts_lower),
-         predicts_upper = if_else(predicts_upper > 1, 1, predicts_upper))
-         
-
-# set-up data for t-test conducted later
-ttest_2020 <- output %>%
-  filter(year == "2020-12-31") %>%
-  dplyr::select(-c(ARIMA_model, country)) %>%
-  dplyr::rename(predicts_2020 = coverage) %>%
-  inner_join(cov_2020, by = "iso_code")
-
-# create consolidated output dataset
-cov_forecast <- output %>%
-  as_tibble() %>%
-  filter(year == "2020-12-31") %>%
-  dplyr::select(-c(ARIMA_model, country)) %>%
-  dplyr::rename(predicts_2020 = coverage) %>%
-  inner_join(cov_2020, by = "iso_code") %>%
-  filter(!is.na(actuals_2020)) %>%
-  mutate(cov_delta_mean = actuals_2020 - predicts_2020,
-         cov_delta_high = actuals_2020 - predicts_upper,
-         cov_delta_low = actuals_2020 - predicts_lower) %>%
-  dplyr::select(country, iso_code, region, income_group, predicts_2020, 
-                predicts_lower, predicts_upper, actuals_2020, cov_delta_mean, 
-                cov_delta_high, cov_delta_low) %>%
-  mutate(confident_95 = ifelse(actuals_2020 > predicts_lower & actuals_2020 < predicts_upper,
-                               FALSE, TRUE),
-         ci_width = predicts_upper - predicts_lower)
-
-# Add in other groupings (region, income) for analyses
-cov_forecast %<>%
-  mutate(un_region = countrycode(iso_code, origin = "iso3c", destination = "un.region.name"),
-         income_group = dplyr::recode_factor(income_group,
-                                             "Low income" = "LIC",
-                                             "Lower middle income" = "LMIC",
-                                             "Upper middle income" = "UMIC",
-                                             "High income" = "HIC"))
+res <- forecasts %>%
+  left_join(x) %>%
+  mutate(delta = coverage - mean,
+         lower_delta = coverage - lower_ci,
+         upper_delta = coverage - upper_ci,
+         confident_95 = (coverage > lower_ci) & (coverage < upper_ci),
+         ci_width = upper_ci - lower_ci
+         )
 
 ```
 
