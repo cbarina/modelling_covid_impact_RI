@@ -1,0 +1,878 @@
+---
+title: "Analyses for COVID-19 impact on Routine Immunisation in 2021"
+author: "Beth Evans and Thibaut Jombart"
+date: "12 Nov 2021"
+output: 
+  html_document:
+    code_folding: "show"
+    toc: TRUE
+    toc_depth: 4
+    toc_float: TRUE
+    toc_collapse: FALSE
+    number_sections: TRUE
+    highlight: pygments
+    theme: spacelab
+params:
+  data: "dtp3"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Set-up
+
+### Load packages
+```{r, message = FALSE}
+library(tidyverse)
+library(rio)
+library(magrittr)
+library(timetk)
+library(broom)
+library(scales)
+library(ggforce)
+library(urca)
+library(tseries)
+library(forecast)
+library(data.table)
+library(countrycode)
+library(here)
+library(flextable)
+library(webshot)
+library(wesanderson)
+
+```
+
+### Load data
+
+Import data:
+
+- Coverage data from WUENIC for 2000-2020
+- Income group classification from World Bank
+- Birth and infant mortality data from United Nations World Population Prospects (UN WPP)
+
+```{r}
+# Set-up toggle to pull DTP1 and DTP3 data respectively when compiling for the appropriate antigen
+if (params$data == "dtp1") {
+  file_path <- here::here("data", "dtp1_oct.csv")
+} else if (params$data == "dtp3") {
+  file_path <- here::here("data", "dtp3_oct.csv")
+} else {
+  msg <- sprintf("Unknown dataset requested: %s", params$data)
+  stop(msg)
+}
+
+# Impact WUENIC data
+data_raw <- file_path %>%
+  rio::import(header = TRUE) %>%
+  tibble()
+data_raw
+
+# Import World Bank classification data
+file_path_wb <- here::here("data", "wb_ig.csv")
+income <- file_path_wb %>%
+  rio::import(header = TRUE) %>%
+  tibble()
+income
+
+# Import UN WPP data
+file_path_unwpp_raw <- here::here("data", "WPP2019_INT_F01_ANNUAL_DEMOGRAPHIC_INDICATORS.csv")
+
+unwpp_raw <- file_path_unwpp_raw %>%
+  rio::import(header = TRUE, skip = 16) %>%
+  tibble()
+
+unwpp_raw
+```
+
+### Set-up output folders
+```{r}
+# Make sure output folder exists
+fig_folder <- here::here("figures", params$data)
+if (!dir.exists(fig_folder)) {
+  dir.create(fig_folder, recursive = TRUE)
+}
+
+# Make sure output folder exists
+csv_folder <- here::here("outputs", "csv", params$data)
+if (!dir.exists(csv_folder)) {
+  dir.create(csv_folder, recursive = TRUE)
+}
+
+```
+
+
+
+### Clean data
+
+Steps taken:
+
+- rename variables 
+- reshape data to long vs. wide format
+- add categorisation columns (income group, region)
+- select relevant columns only 
+
+```{r}
+# Clean and reshape 2000-2019 coverage data
+data_raw %<>%
+  dplyr::rename(region = unicef_region, iso_code = iso3)
+
+data_long <- data_raw %>%
+  dplyr::select(-"2020") %>%
+  pivot_longer(-(region:vaccine), names_to = "year", values_to = "coverage")
+names(data_long) <- tolower(names(data_long))
+data_long
+
+# Select and clean 2020 coverage data (actuals)
+cov_2020 <- data_raw %>%
+  dplyr::select(iso_code, country, '2020') %>%
+  dplyr::rename(actuals_2020 = '2020') %>%
+  mutate(actuals_2020 = actuals_2020 / 100)
+
+# Join 'income' classification to main dataset
+income %<>% 
+  filter(datayear == "2020") %>%
+  dplyr::rename(iso_code = wb_code) %>%
+  dplyr::select(-c(datayear, country, fiscalyear, publicationyear))
+income
+
+data_long %<>%
+  inner_join(income, by = "iso_code")
+data_long
+
+# Clean consolidated projection dataset
+x <- data_long %>%
+  mutate(year = as.integer(year), coverage = coverage / 100) %>%
+  dplyr::select(-vaccine) %>%
+  dplyr::select(region, country, iso_code, income_group,year, coverage) %>%
+  arrange(country, year)
+x
+
+```
+
+## Data filtering
+
+### Filter data for complete data
+
+We remove:
+
+- entries where coverage is NA
+- years prior to 2000
+- countries without data for the last 20 consecutive years
+
+```{r}
+# Filter for data from 2000 onwards (inclusive)
+x <- x %>%
+  filter(year >= 2000, !is.na(coverage))
+
+# Filter for countries with complete data from 2000 to 2020
+sufficient_data <- x %>%
+  group_by(iso_code) %>%
+  dplyr::summarize(count = n()) %>%
+  filter(count >= 20) 
+
+x %<>%
+  inner_join(sufficient_data, by = "iso_code") %>%
+  dplyr::select(-count) %>%
+  mutate(year = as.Date(ISOdate(as.numeric(year), 12, 31)))
+x
+```
+
+## Coverage modelling
+
+Model "expected' 2020 coverage based, in the absence of COVID, based on
+2000-2019 trends.  ARIMA model uses timeseries data by country to (a) select the
+most appropriate model, defined by three parameters (p, d, q) selected as
+follows:
+
+- p = number of autoregressive terms - based on minimisation of the AIC
+- d = number of non-seasonal differences needed for stationarity - based on conducting KPSS tests
+- q = number of lagged forecast errors in the prediction equation - based on minimisation of the AIC
+
+and (b) predict 2020 coverage based on this selected model.
+
+### Fit models
+
+```{r}
+# OLD - to delete if new version works sufficiently
+# ts_df_old <- ts(reshape2::dcast(x, year ~ iso_code), start = 2000, freq = 1)
+
+# Reshape data to timeseries format
+ts_df <- x %>%
+  dplyr::select(year, iso_code, coverage) %>%
+  spread(iso_code, coverage) %>%
+  ts(start = 2000, freq = 1)
+
+# ARIMA forecast 2020 coverage from 2000-2019 data for all countries
+ts_forecast <- lapply(ts_df,
+                      function(y)
+                        forecast(auto.arima(y, seasonal = FALSE), h = 1, level = 95))
+
+model <- as.data.frame(do.call(rbind, ts_forecast)) 
+model <- model[-1,]
+model <- setDT(model, keep.rownames = "iso_code")[]
+model %<>%
+  dplyr::select(iso_code, method, mean, lower, upper) 
+```
+
+Since WUENIC coverage is capped at 99% (i.e., no country can ever report 100%)
+we replace any 2020 estimates >99% to 99% coverage
+
+```{r}
+model %<>%
+  mutate(mean = ifelse(mean > 0.99, 0.99, mean))
+```
+
+
+### Consolidate outputs with expected 2020 dataset
+We:
+- Combine forecast data with actuals to create full timeseries from 2000-2020 including reported and modelled 2020
+- Add in region and income group classifications for each country
+- Structure the data for further analyses (t-tests) and interim outputs
+
+```{r}
+# Create list of ARIMA-modelled 2020 coverage values
+x2 <- x %>%
+  filter(year == '2000-12-31') %>%
+  dplyr::select(-coverage) %>%
+  mutate(year = '2020-12-31') %>%
+  inner_join(model, by = "iso_code") %>%
+  dplyr::rename(coverage = mean,
+                low_bound = lower,
+                upper_bound = upper,
+                ARIMA_model = method)
+
+# Tag current 2020 reported data as "WUENIC reported"
+x %<>%
+  mutate(ARIMA_model = "WUENIC reported",
+         low_bound = NA, 
+         upper_bound = NA)
+
+# Combine historic data and modeled data
+output <- rbind(x, x2) %>%
+  arrange(country, year) %>%
+  mutate(coverage = as.numeric(coverage),
+         ARIMA_model = as.character(ARIMA_model),
+         plot_key = ifelse(ARIMA_model != "WUENIC reported", "Forecast", "Historic"),
+         predicts_lower = as.numeric(low_bound),
+         predicts_upper = as.numeric(upper_bound))
+
+# set-up data for t-test conducted later
+ttest_2020 <- output %>%
+  filter(year == "2020-12-31") %>%
+  dplyr::select(-c(ARIMA_model, country)) %>%
+  dplyr::rename(predicts_2020 = coverage) %>%
+  inner_join(cov_2020, by = "iso_code")
+
+# create consolidated output dataset
+cov_forecast <- output %>%
+  as_tibble() %>%
+  filter(year == "2020-12-31") %>%
+  dplyr::select(-c(ARIMA_model, country)) %>%
+  dplyr::rename(predicts_2020 = coverage) %>%
+  inner_join(cov_2020, by = "iso_code") %>%
+  filter(!is.na(actuals_2020)) %>%
+  mutate(cov_delta_mean = actuals_2020 - predicts_2020,
+         cov_delta_high = actuals_2020 - predicts_upper,
+         cov_delta_low = actuals_2020 - predicts_lower) %>%
+  dplyr::select(country, iso_code, region, income_group, predicts_2020, 
+                predicts_lower, predicts_upper, actuals_2020, cov_delta_mean, 
+                cov_delta_high, cov_delta_low) %>%
+  mutate(confident_95 = ifelse(actuals_2020 > predicts_lower & actuals_2020 < predicts_upper,
+                               FALSE, TRUE),
+         ci_width = predicts_upper - predicts_lower)
+
+# Add in other groupings (region, income) for analyses
+cov_forecast %<>%
+  mutate(un_region = countrycode(iso_code, origin = "iso3c", destination = "un.region.name"),
+         income_group = dplyr::recode_factor(income_group,
+                                             "Low income" = "LIC",
+                                             "Lower middle income" = "LMIC",
+                                             "Upper middle income" = "UMIC",
+                                             "High income" = "HIC"))
+```
+
+## Plot and visualise coverage timeseries
+
+### Plot coverage timeseries for paper
+
+```{r, message = FALSE, warning = FALSE, results = "hide", fig.keep = 1}
+# Select countries for inclusion in plot
+large_pops <- c("China", "India", "Pakistan", "Nigeria")
+
+# Select 2000-2019 historic WUENIC data and ARIMA-modelled 2020 coverage
+pop_dat <- output %>%
+  filter(country %in% large_pops) %>%
+  dplyr::select(country, iso_code, year, coverage, plot_key)
+
+# Select 2020 actuals WUENIC-reported data
+pop_dat_2020 <- cov_2020 %>%
+  filter(country %in% large_pops) %>%
+  mutate(year = "2020-12-31") %>%
+  mutate(year = as.Date(year)) %>%
+  rename(coverage = actuals_2020) %>%
+  mutate(plot_key = "Actuals")
+
+# Combine historic, modelled, and actuals for full dataset for generating plot
+pop_comb <- pop_dat %>%
+  rbind(pop_dat_2020) %>%
+  mutate(shape = ifelse(plot_key == "Actuals", 4, 19))
+
+# Generate plot
+pop_vis <- ggplot(data = pop_dat, aes(x = year(year), y = coverage, color = plot_key)) +
+  geom_point() +
+  geom_point(data = pop_dat_2020, aes(x = year(year), y = coverage, color = plot_key), shape = 4) +
+  geom_smooth(colour = "darkgrey") +
+  labs(title = "WUENIC reported coverage 2000-2019 and ARIMA-modelled expected 2020 coverage", 
+       y = "Coverage (%)",
+       x = "Year") +
+  theme_bw() +
+  theme(legend.position = 'bottom', 
+        legend.text = element_text(size = 14),
+        legend.spacing = unit(0.05, 'cm'),
+        plot.title = element_text(face = "bold", size = 18),
+        legend.title = element_text(face = "bold", size = 16),
+        axis.text.x = element_text(angle=45,hjust = 1, size = 14),
+        axis.text.y = element_text(size = 14), 
+        strip.text.x = element_text(size = 14), 
+        axis.title = element_text(size = 18)) +
+  scale_colour_manual(name = "Datapoint:", 
+                      values = c("blue", "orange", "darkgrey"), 
+                      labels = c("WUENIC reported 2020 coverage",
+                                 "ARIMA modelled 2020 coverage",
+                                 "Historic WUENIC coverage"))+
+  guides(color = guide_legend(override.aes = list(shape = c(16, 16, 4),
+                                                  colour = c("darkgrey", "orange", "blue")),
+                              reverse=TRUE))+
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1L), 
+                     limits = c(0.25,1),
+                     n.breaks = 5) +
+  facet_wrap(~country, ncol = 4, scales = "fixed", labeller = label_wrap_gen(25))
+pop_vis
+
+# Save file 
+ggsave(filename = here::here(fig_folder, "forecast_pop.png"),
+       plot = pop_vis, 
+       width = 30, height = 10, units = "cm")
+```
+
+### Plot for all countries
+
+Output shown for 15 countries at a time - changeable by changing the paginate
+output:
+
+```{r, message = FALSE, warning = FALSE, results = "hide", fig.keep = 1}
+
+# Select 2020 WUENIC-reported actuals data
+plot_dat_key <- cov_2020 %>%
+  mutate(year = "2020-12-31") %>%
+  mutate(year = as.Date(year)) %>%
+  rename(coverage = actuals_2020) %>%
+  mutate(plot_key = "Actuals")
+
+# Select 2000-2019 historic WUENIC data and 2020 ARIMA forecast data, and combine with above
+plot_dat <- output %>%
+  dplyr::select(country, iso_code, year, coverage, plot_key) %>%
+  rbind(plot_dat_key) %>%
+  mutate(shape = ifelse(plot_key == "Actuals", 4, 19)) 
+
+# Generate plot - can change which countries visualised through changing page number in penultimate line
+vis = ggplot(data = plot_dat, aes(x = year(year), y = coverage, color = plot_key)) +
+  geom_point() +
+  geom_smooth(colour = "lightgrey") +
+  labs(title = "WUENIC reported coverage 2000-2019 and ARIMA-modelled expected 2020 coverage", 
+       y = "Coverage (%)",
+       x = "Year") +
+  theme_bw() +
+  theme(legend.position = 'bottom', 
+        legend.text = element_text(size = 10),
+        legend.spacing = unit(0.05, 'cm'),
+        legend.title = element_text(face = "bold"),
+        plot.title = element_text(face = "bold", size = 11),
+        axis.text.x = element_text(angle=45,hjust = 1)) +
+  scale_colour_manual(name = "Datapoint:", 
+                      values = c("blue", "orange", "darkgrey"), 
+                      labels = c("WUENIC reported 2020 coverage",
+                                 "ARIMA modelled 2020 coverage",
+                                 "Historic WUENIC coverage")) +
+  guides(color = guide_legend(reverse=TRUE)) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1L), 
+                     limits = c(0.3,1),
+                     n.breaks = 6) +
+  facet_wrap_paginate(~country, nrow = 3, ncol = 5, scales = "fixed", page = 3, labeller = label_wrap_gen(25))
+vis
+
+```
+<br>
+
+## Conduct t-tests for predicted vs. observed coverage
+
+### Remove unreliable expected coverage estimates
+
+Countries were considered as potential unreliable datapoints based on:
+
+1. Visual inspection of 2000-2019 WUENIC reported coverage showed high
+volatility, i.e., fluctuations over a 10-percentage point range in the last
+five to 10 years – since this indicates coverage estimates may be unreliable
+and uncertain
+
+2. Visual inspection of forecast model fit showed fit dependent on major
+increases/ decreases in 2018-2019 coverage – since this indicates exceptional
+circumstances (e.g., stockouts, civil war) may have overly weighted forecast
+coverage
+
+3. Calculating forecast percentage point improvement in coverage from reported
+2019 to forecast 2020 coverage and reviewing countries with forecast +5
+percentage point improvements – since such may not be programmatically realistic
+(despite model fitting)
+
+Then, WUENIC country-specific documentation was reviewed to confirm whether to
+remove countries.
+
+For option (3):
+
+```{r}
+# Generate table showing forecast percentage point improvement from WUENIC-reported 2019 to modelled 2020 coverage
+pp_change <- output %>% 
+  filter(year == "2019-12-31" | year == "2020-12-31") %>% 
+  dplyr::select(c(country, iso_code, year, coverage)) %>% 
+  spread(year, coverage) %>% 
+  dplyr::rename(Y2019 = "2019-12-31", Y2020 = "2020-12-31") %>% 
+  mutate(delta = Y2020-Y2019)
+
+# Filter for countries with >5p.p. improvement
+pp_change_large <- pp_change %>%
+  filter(delta > 0.05)
+pp_change_large
+
+```
+Countries considered as potential unreliable estimated coverage estimates are detailed with explanations in the Supplementary Materials.
+
+### Remove countries identified as unreliable datapoints
+```{r}
+# Default is to remove no countries
+removed_countries <- NULL
+
+# Removed countries for DTP1
+if (params$data == "dtp1") {
+  removed_countries <- c("Haiti", "Libya", "Samoa", "Solomon Islands", "Brazil",
+                         "Jordan", "Bolivia (Plurinational State of)",
+                         "Suriname", "Austria")
+}
+
+# Removed countries for DTP3
+if (params$data == "dtp3") {
+  removed_countries <- c("Haiti", "Libya", "Samoa", "Solomon Islands", "Brazil", "El Salvador",
+                         "Jordan", "Venezuela (Bolivarian Republic of)", "Suriname")
+}
+
+# Remove counties from dataset for further analysis
+cov_forecast_clean <- cov_forecast %>%
+  dplyr::filter(!country %in% removed_countries)
+
+cov_forecast %<>%
+  mutate(datapoint_removed = ifelse(iso_code %in% cov_forecast_clean$iso_code, FALSE, TRUE))
+```
+
+
+#### Plot of removed datapoints
+
+```{r, message = FALSE, warning = FALSE, results = "hide", fig.keep = 1, fig.width = 10, fig.height = 10, out.width = "100%"}
+
+# Select data for relevant removed countries
+removed_dat <- output %>%
+  filter(country %in% removed_countries)
+
+# Plot data
+removed_vis <- ggplot(data = removed_dat, aes(x = year(year), y = coverage, color = plot_key)) +
+  geom_point() +
+  geom_smooth(colour = "darkgrey") +
+  labs(title = "Countries removed from further analysis due to unreliable datapoints", 
+       y = "Coverage (%)",
+       x = "Year") +
+  theme_bw() +
+  theme(legend.position = 'bottom', 
+        legend.text = element_text(size = 14),
+        legend.spacing = unit(0.05, 'cm'),
+        plot.title = element_text(face = "bold", size = 18),
+        legend.title = element_text(face = "bold", size = 16),
+        axis.text.x = element_text(angle=45,hjust = 1, size = 14),
+        axis.text.y = element_text(size = 14), 
+        strip.text.x = element_text(size = 14), 
+        axis.title = element_text(size = 18)) +
+  scale_colour_manual(name = "Datapoint:", 
+                      values = c("orange", "darkgrey"), 
+                      labels = c("ARIMA modelled 2020 coverage", "Historic WUENIC coverage")) +
+  theme(axis.text.x = element_text(angle=45,hjust = 1)) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1L)) +
+  facet_wrap(~country, scales = "free", labeller = label_wrap_gen(width = 25))
+removed_vis
+
+# Save file
+ggsave(filename = here::here(fig_folder, "removed_countries.png"),
+       plot = removed_vis, 
+       width = 30, height = 30, units = "cm")
+```
+
+### t-test: For all countries combined
+
+```{r}
+
+# Conduct t-test
+ttest_cov_drop <- t.test(cov_forecast_clean$actuals_2020,
+                         cov_forecast_clean$predicts_2020,
+                         paired = TRUE,
+                         alternative = "two.sided")
+
+# Calculate mean WUENIC-reported 2020 coverage and mean ARIMA-modelled 2020 coverage
+if (params$data == "dtp1") {
+  vax <- "dtp1"
+} else if (params$data == "dtp3") {
+  vax <- "dtp3"
+} else {
+  msg <- sprintf("Unknown dataset requested: %s", params$data)
+  stop(msg)
+}  
+
+# Create readable output of t-test results
+total <- cov_forecast_clean %>%
+  filter(!is.na(actuals_2020)) %>%
+  dplyr::summarize(mean(actuals_2020), mean(predicts_2020)) %>%
+  mutate(vaccine = vax) %>%
+  rename(mean_expected = "mean(predicts_2020)",
+         mean_reported = "mean(actuals_2020)") %>%
+  dplyr::select(vaccine, mean_expected, mean_reported)
+
+tt_total <- as.data.frame(do.call(cbind, ttest_cov_drop))
+tt_total = tt_total[-1,]
+tt_total %<>%
+  mutate(point_estimate = as.numeric(estimate),
+         conf_int = as.numeric(conf.int),
+         sample_size = as.numeric(parameter)+1, 
+            # since parameter is degrees of freedom not sample size
+         p_value = as.numeric(p.value),
+         low_bound = as.numeric(estimate) + as.numeric(conf.int),
+         upper_bound = as.numeric(estimate) - as.numeric(conf.int),
+         vaccine = vax) %>%
+  left_join(total, by = "vaccine") %>%
+  dplyr::select(vaccine, sample_size, mean_expected, mean_reported, 
+                point_estimate, low_bound, upper_bound, p_value)
+
+tt_total
+```
+
+### By region
+
+```{r}
+# Conduct t-test
+ttest_region <- cov_forecast_clean %>%
+  filter(!is.na(actuals_2020)) %>%
+  group_by(un_region) %>% 
+  do(tidy(t.test(.$actuals_2020, 
+                 .$predicts_2020, 
+                 alt = "two.sided", 
+                 paired = TRUE)))
+
+# Calculate mean WUENIC-reported 2020 coverage and mean ARIMA-modelled 2020 coverage
+reg <- cov_forecast_clean %>%
+  filter(!is.na(actuals_2020)) %>%
+  group_by(un_region) %>%
+  dplyr::summarise(mean(actuals_2020), mean(predicts_2020)) %>%
+  mutate(vaccine = vax) %>%
+  rename(mean_expected = "mean(predicts_2020)",
+         mean_reported = "mean(actuals_2020)") %>%
+  dplyr::select(un_region, mean_expected, mean_reported)
+
+# Create vector of key outputs from t-test
+tt_reg <- ttest_region %>%
+  dplyr::select(un_region, estimate, p.value, parameter, conf.low, conf.high) %>%
+  dplyr::rename(point_estimate = estimate,
+                p_value = p.value,
+                sample_size = parameter,
+                low_bound = conf.low,
+                upper_bound = conf.high) %>%
+  mutate(sample_size = (sample_size + 1)) %>% #since parameter is degrees of freedom not sample size
+  left_join(reg, by = "un_region") %>%
+  dplyr::select(un_region, sample_size, mean_expected, mean_reported,
+                point_estimate, low_bound, upper_bound, p_value)
+
+tt_reg
+```
+
+#### Box plot for region
+
+```{r}
+# Generate region box plot
+region_pal <- wes_palette("Darjeeling1", 5, type = "discrete")
+
+region <- ggplot(cov_forecast_clean, aes(x = un_region, y = cov_delta_mean, color = un_region)) +
+  geom_boxplot(color = region_pal) +
+  geom_point(size = 2, position = position_jitter(width = 0.2)) +
+  scale_colour_manual(values = region_pal) +
+  stat_summary(fun = mean, geom = "point", shape = 4, size = 4, color = region_pal) +
+  scale_y_continuous(labels = unit_format(unit = "%", scale = 1e+2)) +
+  labs(title = "Region: box plot of change in coverage by UN region",
+       x = "Region",
+       y = "Change in coverage (reported - expected)",
+       colour = "Region") +
+  theme_light() +
+  theme(plot.title = element_text(face = "bold", size = 20),
+        legend.position = "none",
+        axis.text = element_text(size = 14),
+        axis.title.y = element_text(angle = 90),
+        axis.title = element_text(size = 17)
+  ) +
+  scale_x_discrete(labels = wrap_format(12)) +
+  geom_hline(aes(yintercept = 0), linetype = "dashed", colour = "black", size = 1)
+region
+
+# Save file
+ggsave(filename = here::here(fig_folder, "region_box_plot.png"),
+       plot = region, 
+       width = 30, height = 15, units = "cm")
+
+```
+
+
+### By income group
+
+```{r}
+# Conduct t-test
+ttest_income_group <- cov_forecast_clean %>%
+  filter(!is.na(actuals_2020)) %>%
+  filter(iso_code != "VEN") %>%
+  group_by(income_group) %>% 
+  do(tidy(t.test(.$actuals_2020, 
+                 .$predicts_2020, 
+                 alt = "two.sided", 
+                 paired = TRUE)))
+
+# Calculate mean WUENIC-reported 2020 coverage and mean ARIMA-modelled 2020 coverage
+inc_grp <- cov_forecast_clean %>%
+  filter(!is.na(actuals_2020)) %>%
+  group_by(income_group) %>%
+  dplyr::summarize(mean(actuals_2020), mean(predicts_2020)) %>%
+  mutate(vaccine = vax) %>%
+  rename(mean_expected = "mean(predicts_2020)",
+         mean_reported = "mean(actuals_2020)") %>%
+  dplyr::select(income_group, mean_expected, mean_reported)
+
+# Create vector of key outputs from t-test
+tt_inc_grp <- ttest_income_group %>%
+  dplyr::select(income_group, estimate, p.value, parameter, conf.low, conf.high) %>%
+  dplyr::rename(point_estimate = estimate,
+                p_value = p.value,
+                sample_size = parameter,
+                low_bound = conf.low,
+                upper_bound = conf.high) %>%
+  mutate(sample_size = (sample_size+1)) %>% #since parameter is degrees of freedom not sample size
+  left_join(inc_grp, by = "income_group") %>%
+  dplyr::select(income_group, sample_size, mean_expected, mean_reported,
+                point_estimate, low_bound, upper_bound, p_value)
+
+tt_inc_grp
+```
+
+```{r}
+# Generate income group box plot
+income_dat <- cov_forecast_clean %>%
+  filter(iso_code != "VEN")   #remove Venezuela since has no income group
+
+income_pal <- wes_palette("BottleRocket2", 4, type = "discrete")
+
+income_box <- ggplot(income_dat, aes(x = income_group, y = cov_delta_mean, color = income_group)) +
+  labs(title = "Income group: box plot of change in coverage by income group",
+       x = "Income group",
+       y = "Change in coverage (reported - expected)",
+       colour = "Income group") +
+  scale_y_continuous(labels = unit_format(unit = "%", scale = 1e+2)) +
+  geom_boxplot(colour = income_pal) +
+  geom_point(size = 2, position = position_jitter(width = 0.2)) +
+  scale_colour_manual(values = income_pal) +
+  stat_summary(fun = mean, geom = "point", shape = 4, size = 4, color = income_pal) +
+  theme_light() +
+  theme(plot.title = element_text(face = "bold", size = 20),
+        legend.position = "none",
+        axis.text = element_text(size = 16),
+        axis.title.y = element_text(angle = 90),
+        axis.title = element_text(size = 18)) +
+  geom_hline(aes(yintercept = 0), linetype = "dashed", colour = "black", size = 1)
+income_box
+
+# Save file
+ggsave(filename = here::here(fig_folder, "income_box_plot.png"),
+       plot = income_box, 
+       width = 30, height = 15, units = "cm")
+
+```
+
+#### Save t-test outputs
+
+```{r}
+# Save files
+write.csv(
+  tt_reg,
+  here::here(csv_folder, "ttest_region.csv"),
+  row.names = FALSE)
+write.csv(
+  tt_inc_grp,
+  here::here(csv_folder, "ttest_income.csv"),
+  row.names = FALSE)
+write.csv(
+  tt_total,
+  here::here(csv_folder, "ttest_total.csv"),
+  row.names = FALSE)
+
+```
+
+
+## Outputs including missed immunisation quantification
+
+### Calculate missed immunisations
+- Import UNWPP data
+- Clean UNWPP data to calculate surviving infants in 2020 (target populations for DTP1 and DTP3 vaccination)
+- Calculation is: number of births - number of infants that die < age 1
+
+#### Clean UNWPP data
+```{r}
+unwpp <- unwpp_raw %>% 
+  rename(country = "Region, subregion, country or area *",
+         country_code = "Country code",
+         infant_deaths = "Infant deaths, both sexes combined (under age 1, thousands)",
+         births = "Births (thousands)",
+         year = "Reference date (1 January - 31 December)") %>%
+  filter(Type == "Country/Area",
+         year == 2020) %>%
+  dplyr::select(country, country_code, infant_deaths, births) %>%
+  mutate(births = as.numeric(str_replace_all(births," ", "")),
+         infant_deaths = as.numeric(infant_deaths),
+         iso_code = countrycode(sourcevar = country_code, origin = "iso3n", destination = "iso3c"),
+         surviving_infants = (births-infant_deaths)*1000) %>%
+  dplyr::select(iso_code, surviving_infants)
+```
+#### Calculate missed immunisations
+- Multiply coverage delta estimates by surviving infant populations to calculate
+additional missed immunisations
+
+```{r}
+
+# Calculate missed immunisations
+cov_forecast %<>%
+  left_join(unwpp, by = "iso_code") %>%
+  mutate(additional_missed = as.integer(surviving_infants * cov_delta_mean * -1),
+         additional_missed_low = as.integer(surviving_infants * cov_delta_low * -1),
+         additional_missed_high = as.integer(surviving_infants * cov_delta_high * -1),
+         expected_missed = as.integer((1 - predicts_2020) * surviving_infants),
+         total_missed = as.integer((1 - actuals_2020) * surviving_infants))
+
+```
+
+### Create summary output table including % coverage delta and missed immunisations
+```{r}
+# Create summary output in cleaned format
+summary_output <- cov_forecast %>%
+  mutate(actuals_2020 = percent(actuals_2020, accuracy = 0.1),
+         predicts_2020 = percent(predicts_2020, accuracy = 0.1),
+         cov_delta_mean = percent(cov_delta_mean,accuracy = 0.1)) %>%
+  dplyr::select(country, iso_code, region, un_region, income_group,
+                predicts_2020, predicts_lower,
+                predicts_upper, datapoint_removed, ci_width,
+                actuals_2020, cov_delta_mean, cov_delta_low, cov_delta_high,
+                confident_95, surviving_infants, total_missed, expected_missed, 
+                additional_missed, additional_missed_low, additional_missed_high) %>%
+  rename(Country = country,
+         "ISO code" = iso_code,
+         "UNICEF Region (unused)" = region,
+         "UN region" = un_region,
+         "Income group" = income_group,
+         "ARIMA modelled expected 2020 coverage (mean)" = predicts_2020,
+         "ARIMA modelled expected coverage (max 95% CI)" = predicts_lower,
+         "ARIMA modelled expected coverage (min 95% CI)" = predicts_upper,
+         "ARIMA coverage 95% CI" = ci_width,
+         "WUENIC reported 2020 coverage" = actuals_2020,
+         "Coverage delta" = cov_delta_mean,
+         "Coverage delta (max 95% CI)" = cov_delta_low,
+         "Coverage delta (min 95% CI)" = cov_delta_high,
+         "95% confident actuals outside expected" = confident_95,
+         "Surviving infants" = surviving_infants,
+         "Additional missed immunisations (mean)" = additional_missed,
+         "Additional missed immunisations (max 95% CI)" = additional_missed_high,
+         "Additional missed immunisations (min 95% CI)" = additional_missed_low,
+         "Expected missed children" = expected_missed,
+         "Total missed immunisations" = total_missed,
+         "ARIMA forecast unreliable" = datapoint_removed)
+
+# Save file
+write.csv(
+  summary_output,
+  here::here(csv_folder, "summary_output.csv"),
+  row.names = FALSE)
+```
+
+### Generate table for manuscript
+```{r}
+border_style = officer::fp_border(color="black", width=1)
+
+table_output <- summary_output %>%
+  filter(`ARIMA forecast unreliable` == FALSE) %>%
+  arrange(desc(`Additional missed immunisations (mean)`)) %>%
+  head(10) %>%
+    mutate(`ARIMA modelled expected 2020 coverage [95% CI]` = 
+           paste(`ARIMA modelled expected 2020 coverage (mean)`,
+                 " [",percent(as.numeric(`ARIMA modelled expected coverage (max 95% CI)`), 
+                              accuracy = 0.1)
+                 ,"; ",percent(as.numeric(`ARIMA modelled expected coverage (min 95% CI)`), 
+                               accuracy = 0.1),"]",
+                 sep = "")) %>%
+    rename(`Change in coverage (mean)` = `Coverage delta`) %>%
+  select(Country, `ISO code`, `UN region`, `Income group`,
+         `ARIMA modelled expected 2020 coverage [95% CI]`, `WUENIC reported 2020 coverage`,
+         `Change in coverage (mean)`, `Total missed immunisations`,
+         `Additional missed immunisations (mean)`) %>%
+  flextable() %>% 
+  width(j=c(3, 4, 6, 7), width = 1) %>%
+  width(j=1, width = 1.1) %>%
+  width(j=2, width = 0.5) %>%
+  width(j=5, width = 2) %>%
+  width(j=c(8, 9), width = 1.25) %>%
+  theme_booktabs() %>%
+  bold(bold = TRUE, part = "header") %>%
+  vline(part = "all", j = 4, border = border_style) %>%
+  vline(part = "all", j = 7, border = border_style)
+
+table_output
+
+save_as_docx("Modelled coverage declines and missed immunisations for 10 countries with greatest absolute increases in missed immunisations" = table_output, path = "../figures/top10_table.docx")
+save_as_image(table_output, path = "../figures/top10_table.png", webshot = "webshot")
+```
+
+
+### Summary modelling output
+
+Produce table showing order and fit of all ARIMA models per country
+
+```{r}
+# Generate summary table showing ARIMA model fit
+order <- output %>%
+  filter(plot_key == "Forecast") %>%
+  dplyr::select(country, iso_code) %>%
+  left_join(model, by = "iso_code") %>%
+  as_tibble() %>%
+  mutate(mean = percent(as.numeric(mean), accuracy = 0.1),
+         lower = percent(as.numeric(lower), accuracy = 0.1),
+         upper = percent(as.numeric(upper),accuracy = 0.1),
+         method = as.character(method)) %>%
+  rename(Country = country,
+         "ISO code" = iso_code,
+         "ARIMA model fit" = method,
+         "Expected 2020 coverage" = mean,
+         "Expected: 95% Confidence interval - lower bound" = lower,
+         "Expected: 95% Confidence interval - upper bound" = upper)
+
+# Save file
+write.csv(
+  order,
+  here::here(csv_folder, "ARIMA_models.csv"),
+  row.names = FALSE)
+
+```
