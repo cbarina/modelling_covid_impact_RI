@@ -1,7 +1,7 @@
 ---
 title: "Analyses for COVID-19 impact on Routine Immunisation in 2021"
 author: "Beth Evans and Thibaut Jombart"
-date: "12 Nov 2021"
+date: "30 Nov 2021"
 output: 
   html_document:
     code_folding: "show"
@@ -20,9 +20,10 @@ params:
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Set-up
+# Set-up
 
-### Load packages
+## Load packages
+
 ```{r, message = FALSE}
 library(tidyverse)
 library(rio)
@@ -43,16 +44,18 @@ library(wesanderson)
 
 ```
 
-### Load data
+## Load raw data
 
 Import data:
 
 - Coverage data from WUENIC for 2000-2020
 - Income group classification from World Bank
-- Birth and infant mortality data from United Nations World Population Prospects (UN WPP)
+- Birth and infant mortality data from United Nations World Population Prospects
+  (UN WPP)
 
 ```{r}
-# Set-up toggle to pull DTP1 and DTP3 data respectively when compiling for the appropriate antigen
+# Set-up toggle to pull DTP1 and DTP3 data respectively when compiling for the
+# appropriate antigen
 if (params$data == "dtp1") {
   file_path <- here::here("data", "dtp1_oct.csv")
 } else if (params$data == "dtp3") {
@@ -86,7 +89,12 @@ unwpp_raw
 
 ```
 
-### Set-up output folders
+## Set-up output folders
+
+Outputs are stored in two separate folders (in addition to the compiled report,
+handled by the *reportfactory*), *outputs/figures/* and *outputs/csv/*. We make
+sure these exist.
+
 ```{r}
 # Make sure output folder exists
 fig_folder <- here::here("figures", params$data)
@@ -104,7 +112,11 @@ if (!dir.exists(csv_folder)) {
 
 
 
-### Clean data
+# Data preparation
+
+Here we prepare the dataset analysed called `x`.
+
+## Data cleaning
 
 Steps taken:
 
@@ -149,22 +161,21 @@ x <- data_long %>%
   arrange(country, year)
 x
 
-
 ```
+
 
 ## Data filtering
 
-### Filter data for complete data
-
 We remove:
 
-- entries where coverage is NA
 - years prior to 2000
-- countries without data for the last 20 consecutive years
+- entries where coverage is NA
+- countries without data for the last 21 consecutive years (from 2000 to 2020,
+  inclusive)
 
 ```{r}
 
-# Filter for data from 2000 onwards (inclusive)
+# Filter for data from 2000 onwards (inclusive), remove NAs
 x <- x %>%
   filter(year >= 2000, !is.na(coverage))
 
@@ -177,14 +188,18 @@ complete_countries <- x %>%
 x %<>%
   filter(iso_code %in% complete_countries)
 
-## # make artificial dates for TS modelling
-## x %>% 
-##   mutate(date = as.Date(sprintf("%s-12-31", year)))
-## x
-
 ```
 
-## Coverage modelling
+
+# ARIMA modelling
+
+Here we apply ARIMA to each country using the years 2000-2019 as training set,
+and derive a forecast for 2020 with associated confidence intervals. The final
+object will be called `res`, and will include these forecasts, the actual values
+reported, and the corresponding coverage *deltas*, defined as (% reported - %
+expected).
+
+## Model parameters
 
 Model "expected' 2020 coverage based, in the absence of COVID, based on
 2000-2019 trends.  ARIMA model uses timeseries data by country to (a) select the
@@ -197,7 +212,11 @@ follows:
 
 and (b) predict 2020 coverage based on this selected model.
 
-### Fit models
+
+## Fitting models
+
+`auto.arima` requires time series (`ts`) objects, which is essentially a wide
+format for coverage data (rows = years, columns = countries)..
 
 ```{r}
 
@@ -211,15 +230,21 @@ ts_df <- x %>%
   ts(start = 2000, freq = 1)
 
 # ARIMA forecast 2020 coverage from 2000-2019 data for all countries
-ts_forecast <- lapply(ts_df,
+ts_forecasts <- lapply(ts_df, # iterate over all countries
                       function(y)
-                        forecast(auto.arima(y, seasonal = FALSE), h = 1, level = 95))
+                        forecast(auto.arima(y, seasonal = FALSE),
+                                 h = 1, # forecast 1 year ahead
+                                 level = 95 # 95% CIs
+                                 ))
 
 # extract forecasts and format output
-temp <- lapply(ts_forecast, as.data.frame)
+temp <- lapply(ts_forecasts, as.data.frame)
 
 forecasts <- bind_rows(temp) %>%
-  mutate(iso_code = names(temp), mean = `Point Forecast`, lower_ci = `Lo 95`, upper_ci = `Hi 95`) %>%
+  mutate(iso_code = names(temp),
+         mean = `Point Forecast`,
+         lower_ci = `Lo 95`,
+         upper_ci = `Hi 95`) %>%
   tibble() %>%
   select(iso_code, mean, lower_ci, upper_ci)
 forecasts
@@ -240,15 +265,15 @@ forecasts <- forecasts %>%
 ```
 
 
-### Add ARIMA predictions to the data
+## Combine ARIMA predictions and 2020 data
 
 Here we add the model prediction to the data, keeping only 2020, and calculate
-deltas (coverage values in 2020: reported - expected) and associated confidence
-intervals.
+deltas (coverage values in 2020: % reported - % expected) and associated
+confidence intervals.
 
 ```{r}
 
-res <- forecasts %>%
+res_all <- forecasts %>%
   left_join(x) %>%
   filter(year == 2020) %>% 
   mutate(delta = coverage - mean,
@@ -260,58 +285,8 @@ res <- forecasts %>%
 
 ```
 
-## Plot and visualise coverage timeseries
 
-This reproduces the figure from the paper using the 4 largest countries as an
-example of reported coverage values vs ARIMA model prediction.
-
-```{r, out.width = "100%, fig.width = 10}
-
-# Select countries for inclusion in plot
-large_pops <- c("China", "India", "Pakistan", "Nigeria")
-
-x_large <- x %>%
-  filter(country %in% large_pops)
-
-res_large <- res %>%
-  filter(country %in% large_pops)
-
-# Generate plot
-arima_color <- "#ac3973"
-
-pop_vis <- ggplot(data = x_large, aes(x = year, y = coverage)) +
-  theme_bw() +
-  geom_point(alpha = 0.8) +
-  geom_line(alpha = 0.3) +
-  geom_errorbar(data = res_large, aes(ymin = lower_ci, ymax = upper_ci),
-                color = arima_color) +
-  geom_point(data = res_large, aes(y = mean), shape = 3, color = arima_color) +
-  facet_wrap(~ country, nrow = 1, scales = "free_y", labeller = label_wrap_gen(25)) +
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1L), 
-                     limits = c(NA,1),
-                     n.breaks = 5) +
-  labs(y = "Coverage (%)",
-       x = "Year") +
-  theme(axis.text.x = element_text(angle=45,hjust = 1, size = 14),
-        axis.text.y = element_text(size = 14), 
-        strip.text.x = element_text(size = 14), 
-        axis.title = element_text(size = 18))
- 
-pop_vis
-
-# Save file 
-ggsave(filename = here::here(fig_folder, "forecast_pop.png"),
-       plot = pop_vis, 
-       width = 30, height = 10, units = "cm")
-
-```
-
-
-<br>
-
-## Conduct t-tests for predicted vs. observed coverage
-
-### Remove unreliable expected coverage estimates
+## Remove unreliable expected coverage estimates
 
 Countries were considered as potential unreliable datapoints based on:
 
@@ -336,23 +311,20 @@ remove countries.
 For option (3):
 
 ```{r}
-# Generate table showing forecast percentage point improvement from WUENIC-reported 2019 to modelled 2020 coverage
-pp_change <- output %>% 
-  filter(year == "2019-12-31" | year == "2020-12-31") %>% 
-  dplyr::select(c(country, iso_code, year, coverage)) %>% 
-  spread(year, coverage) %>% 
-  dplyr::rename(Y2019 = "2019-12-31", Y2020 = "2020-12-31") %>% 
-  mutate(delta = Y2020-Y2019)
 
 # Filter for countries with >5p.p. improvement
-pp_change_large <- pp_change %>%
+res <- res_all %>%
   filter(delta > 0.05)
-pp_change_large
+res
 
 ```
-Countries considered as potential unreliable estimated coverage estimates are detailed with explanations in the Supplementary Materials.
 
-### Remove countries identified as unreliable datapoints
+Countries considered as potential unreliable estimated coverage estimates are
+detailed with explanations in the Supplementary Materials.
+
+
+## Remove countries identified as unreliable datapoints
+
 ```{r}
 # Default is to remove no countries
 removed_countries <- NULL
@@ -366,57 +338,132 @@ if (params$data == "dtp1") {
 
 # Removed countries for DTP3
 if (params$data == "dtp3") {
-  removed_countries <- c("Haiti", "Libya", "Samoa", "Solomon Islands", "Brazil", "El Salvador",
-                         "Jordan", "Venezuela (Bolivarian Republic of)", "Suriname")
+  removed_countries <- c("Haiti", "Libya", "Samoa", "Solomon Islands", "Brazil",
+                         "El Salvador", "Jordan",
+                         "Venezuela (Bolivarian Republic of)", "Suriname")
 }
 
-# Remove counties from dataset for further analysis
-cov_forecast_clean <- cov_forecast %>%
+# Keep track of removed countries
+res_removed_countries <- res %>%
+  dplyr::filter(country %in% removed_countries)
+x_removed_countries <- x %>%
+  dplyr::filter(country %in% removed_countries)
+
+# Remove countries from dataset for further analysis
+res <- res %>%
   dplyr::filter(!country %in% removed_countries)
 
-cov_forecast %<>%
-  mutate(datapoint_removed = ifelse(iso_code %in% cov_forecast_clean$iso_code, FALSE, TRUE))
 ```
 
 
 #### Plot of removed datapoints
 
-```{r, message = FALSE, warning = FALSE, results = "hide", fig.keep = 1, fig.width = 10, fig.height = 10, out.width = "100%"}
+```{r, results = "hide", fig.keep = 1, fig.width = 10, fig.height = 10, out.width = "100%"}
 
 # Select data for relevant removed countries
-removed_dat <- output %>%
-  filter(country %in% removed_countries)
 
 # Plot data
-removed_vis <- ggplot(data = removed_dat, aes(x = year(year), y = coverage, color = plot_key)) +
+removed_vis <- res_removed_countries %>%
+  ggplot(aes(x = year(year), y = coverage)) +
   geom_point() +
   geom_smooth(colour = "darkgrey") +
-  labs(title = "Countries removed from further analysis due to unreliable datapoints", 
+
+
+# Generate plot
+arima_color <- "#ac3973"
+
+fig_removed_countries <- x_removed_countries %>%
+  ggplot(aes(x = year, y = coverage)) +
+  theme_bw() +
+  geom_point(alpha = 0.8) +
+  geom_line(alpha = 0.3) +
+  geom_errorbar(data = res_removed_countries,
+                aes(ymin = lower_ci, ymax = upper_ci),
+                color = arima_color) +
+  geom_point(data = res_large, aes(y = mean), shape = 3, color = arima_color) +
+  facet_wrap(~ country, scales = "free_y",
+             labeller = label_wrap_gen(25)) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1L), 
+                     limits = c(NA,1),
+                     n.breaks = 5) +
+  labs(title = "Countries removed from further analysis - unreliable ARIMA",
        y = "Coverage (%)",
        x = "Year") +
-  theme_bw() +
-  theme(legend.position = 'bottom', 
-        legend.text = element_text(size = 14),
-        legend.spacing = unit(0.05, 'cm'),
-        plot.title = element_text(face = "bold", size = 18),
-        legend.title = element_text(face = "bold", size = 16),
-        axis.text.x = element_text(angle=45,hjust = 1, size = 14),
+  theme(axis.text.x = element_text(angle=45,hjust = 1, size = 14),
         axis.text.y = element_text(size = 14), 
         strip.text.x = element_text(size = 14), 
-        axis.title = element_text(size = 18)) +
-  scale_colour_manual(name = "Datapoint:", 
-                      values = c("orange", "darkgrey"), 
-                      labels = c("ARIMA modelled 2020 coverage", "Historic WUENIC coverage")) +
-  theme(axis.text.x = element_text(angle=45,hjust = 1)) +
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1L)) +
-  facet_wrap(~country, scales = "free", labeller = label_wrap_gen(width = 25))
-removed_vis
+        axis.title = element_text(size = 18))
+
+fig_removed_countries
 
 # Save file
 ggsave(filename = here::here(fig_folder, "removed_countries.png"),
-       plot = removed_vis, 
+       plot = fig_removed_countries, 
        width = 30, height = 30, units = "cm")
+
 ```
+
+
+
+## Plot and visualise coverage timeseries
+
+This reproduces the figure from the paper using the 4 largest countries as an
+example of reported coverage values vs ARIMA model prediction.
+
+```{r, out.width = "100%", fig.width = 10}
+
+# Select countries for inclusion in plot
+large_pops <- c("China", "India", "Pakistan", "Nigeria")
+
+x_large <- x %>%
+  filter(country %in% large_pops)
+
+res_large <- res %>%
+  filter(country %in% large_pops)
+
+# Generate plot
+arima_color <- "#ac3973"
+
+fig_large_pops <- ggplot(data = x_large, aes(x = year, y = coverage)) +
+  theme_bw() +
+  geom_point(alpha = 0.8) +
+  geom_line(alpha = 0.3) +
+  geom_errorbar(data = res_large, aes(ymin = lower_ci, ymax = upper_ci),
+                color = arima_color) +
+  geom_point(data = res_large, aes(y = mean), shape = 3, color = arima_color) +
+  facet_wrap(~ country, nrow = 1, scales = "free_y",
+             labeller = label_wrap_gen(25)) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1L), 
+                     limits = c(NA,1),
+                     n.breaks = 5) +
+  labs(y = "Coverage (%)",
+       x = "Year") +
+  theme(axis.text.x = element_text(angle=45,hjust = 1, size = 14),
+        axis.text.y = element_text(size = 14), 
+        strip.text.x = element_text(size = 14), 
+        axis.title = element_text(size = 18))
+ 
+fig_large_pops
+
+# Save file 
+ggsave(filename = here::here(fig_folder, "forecast_pop.png"),
+       plot = fig_large_pops, 
+       width = 30, height = 10, units = "cm")
+
+```
+
+
+
+
+
+<br>
+
+# Investigating differences in coverage
+
+In this section we analyse the differences between reported and expected
+coverage, in general and across different strata.
+
+## Conduct t-tests for predicted vs. observed coverage
 
 ### t-test: For all countries combined
 
