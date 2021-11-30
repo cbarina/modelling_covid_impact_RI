@@ -500,8 +500,8 @@ the 95% CI of delta excludes zero.
 
 fig_overall_results <- res %>% 
   ggplot(aes(x = mean, y = coverage)) +
-  #geom_pointrange(alpha = .4, aes(xmin = lower_ci, xmax = upper_ci)) +
-  geom_point(alpha = .4, size = 3, aes(color = confident_95)) +
+  geom_pointrange(alpha = .4, aes(xmin = lower_ci, xmax = upper_ci, color = confident_95)) +
+  #geom_point(alpha = .4, size = 3, aes(color = confident_95)) +
   geom_abline(slope = 1, intercept = 0, linetype = 2) + 
   scale_x_continuous(labels = unit_format(unit = "%", scale = 1e+2)) +
   scale_y_continuous(labels = unit_format(unit = "%", scale = 1e+2)) +
@@ -535,13 +535,13 @@ Here we perform an ANOVA and associated boxplot by region.
 ```{r}
 
 # linear model
-lm_regions <- lm(delta ~ -1 + region, data = res)
+lm_region <- lm(delta ~ -1 + region, data = res)
 
 # ANOVA
-anova(lm_regions)
+anova(lm_region)
 
 # Tests on individual coefficients
-ttest_regions <- lm_regions %>%
+ttest_regions <- lm_region %>%
   summary() %>%
   tidy()
 
@@ -552,7 +552,14 @@ stats_regions <- res %>%
             expected = mean(mean),
             delta = mean(delta))
 
-tt_regions <- tibble(stats_regions, ttest_regions)
+# Confidence intervals (95%)
+ci_regions <- lm_region %>%
+  confint() %>%
+  as.data.frame() %>%
+  setNames(c("lower_ci", "upper_ci")) %>%
+  tibble()
+
+tt_regions <- tibble(stats_regions, ci_regions, ttest_regions)
 tt_regions
 
 # Save output
@@ -565,7 +572,7 @@ write.csv(
 
 We generate a boxplot by region:
 
-```{r}
+```{r boxplot_region}
 
 # Generate region box plot
 n_regions <- res %>%
@@ -613,14 +620,14 @@ res_no_missing_income <- res %>%
   filter(income_group != "")
 
 # linear model
-lm_incomes <- lm(delta ~ -1 + income_group,
+lm_income <- lm(delta ~ -1 + income_group,
                  data = res_no_missing_income)
 
 # ANOVA
-anova(lm_incomes)
+anova(lm_income)
 
 # Tests on individual coefficients
-ttest_incomes <- lm_incomes %>%
+ttest_incomes <- lm_income %>%
   summary() %>%
   tidy()
 
@@ -631,7 +638,14 @@ stats_incomes <- res_no_missing_income %>%
             expected = mean(mean),
             delta = mean(delta))
 
-tt_incomes <- tibble(stats_incomes, ttest_incomes)
+# Confidence intervals (95%)
+ci_incomes <- lm_income %>%
+  confint() %>%
+  as.data.frame() %>%
+  setNames(c("lower_ci", "upper_ci")) %>%
+  tibble()
+
+tt_incomes <- tibble(stats_incomes, ci_incomes, ttest_incomes)
 tt_incomes
 
 # Save output
@@ -644,7 +658,7 @@ write.csv(
 
 We generate a boxplot by income group:
 
-```{r}
+```{r boxplot_income}
 
 # Generate income group box plot
 n_income <- res_no_missing_income %>%
@@ -688,11 +702,18 @@ income.
 
 ```{r}
 
-# linear model
-lm_region_incomes <- lm(delta ~ income_group + region, data = res)
+# effect of region after accounting for income
+lm_income_region <- lm(delta ~ income_group + region, data = res)
 
 # ANOVA
-anova(lm_region_incomes)
+anova(lm_income_region, lm_income)
+
+# effect of income after accounting for region
+lm_region_income <- lm(delta ~ region + income_group, data = res)
+
+# ANOVA
+anova(lm_region_income, lm_region)
+
 
 ```
 
