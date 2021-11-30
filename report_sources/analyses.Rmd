@@ -242,7 +242,8 @@ ts_forecasts <- lapply(ts_df, # iterate over all countries
                                  ))
 
 # extract forecasts and format output
-temp <- lapply(ts_forecasts, as.data.frame)
+temp <- lapply(ts_forecasts,
+               function(e) c(method = e$method, as.data.frame(e)))
 
 forecasts <- bind_rows(temp) %>%
   mutate(iso_code = names(temp),
@@ -250,7 +251,7 @@ forecasts <- bind_rows(temp) %>%
          lower_ci = `Lo 95`,
          upper_ci = `Hi 95`) %>%
   tibble() %>%
-  select(iso_code, mean, lower_ci, upper_ci)
+  select(iso_code, method, mean, lower_ci, upper_ci)
 forecasts
 
 ```
@@ -665,7 +666,7 @@ fig_income
 
 # Save file
 ggsave(filename = here::here(fig_folder, "income_box_plot.png"),
-       plot = income_box, 
+       plot = fig_income, 
        width = 30, height = 15, units = "cm")
 
 ```
@@ -856,25 +857,20 @@ Produce table showing order and fit of all ARIMA models per country
 
 ```{r}
 # Generate summary table showing ARIMA model fit
-order <- output %>%
-  filter(plot_key == "Forecast") %>%
-  dplyr::select(country, iso_code) %>%
-  left_join(model, by = "iso_code") %>%
-  as_tibble() %>%
+arima_table <- res %>%
   mutate(mean = percent(as.numeric(mean), accuracy = 0.1),
-         lower = percent(as.numeric(lower), accuracy = 0.1),
-         upper = percent(as.numeric(upper),accuracy = 0.1),
-         method = as.character(method)) %>%
+         lower_ci = percent(as.numeric(lower_ci), accuracy = 0.1),
+         upper_ci = percent(as.numeric(upper_ci),accuracy = 0.1)) %>%
   rename(Country = country,
          "ISO code" = iso_code,
          "ARIMA model fit" = method,
          "Expected 2020 coverage" = mean,
-         "Expected: 95% Confidence interval - lower bound" = lower,
-         "Expected: 95% Confidence interval - upper bound" = upper)
+         "Expected: 95% Confidence interval - lower bound" = lower_ci,
+         "Expected: 95% Confidence interval - upper bound" = upper_ci)
 
 # Save file
 write.csv(
-  order,
+  arima_table,
   here::here(csv_folder, "ARIMA_models.csv"),
   row.names = FALSE)
 
