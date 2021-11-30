@@ -17,7 +17,10 @@ params:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE,
+                      dev = c("png", "pdf"),
+                      fig.path = "figs/",
+                      dpi = 100)
 ```
 
 # Set-up
@@ -409,7 +412,7 @@ ggsave(filename = here::here(fig_folder, "forecast_removed_countries.png"),
 This reproduces the figure from the paper using the 4 largest countries as an
 example of reported coverage values vs ARIMA model prediction.
 
-```{r, out.width = "100%", fig.width = 10}
+```{r fig_large_pops, out.width = "100%", fig.width = 10, fig.height = 3}
 
 # Select countries for inclusion in plot
 large_pops <- c("China", "India", "Pakistan", "Nigeria")
@@ -493,7 +496,7 @@ write.csv(
 We represent a corresponding scatterplot. Red dots indicate countries for which
 the 95% CI of delta excludes zero.
 
-```{r }
+```{r fig_overall_results, fig.width = 8, fig.height = 8}
 
 fig_overall_results <- res %>% 
   ggplot(aes(x = mean, y = coverage)) +
