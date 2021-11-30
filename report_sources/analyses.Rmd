@@ -605,8 +605,13 @@ Here we perform an ANOVA and associated boxplot by income group.
 
 ```{r}
 
+# remove countries with no income group
+res_no_missing_income <- res %>%
+  filter(income_group != "")
+
 # linear model
-lm_incomes <- lm(delta ~ -1 + income_group, data = res)
+lm_incomes <- lm(delta ~ -1 + income_group,
+                 data = res_no_missing_income)
 
 # ANOVA
 anova(lm_incomes)
@@ -617,7 +622,7 @@ ttest_incomes <- lm_incomes %>%
   tidy()
 
 # Create readable output
-stats_incomes <- res %>%
+stats_incomes <- res_no_missing_income %>%
   group_by(income_group) %>%
   summarise(reported = mean(coverage),
             expected = mean(mean),
@@ -639,14 +644,14 @@ We generate a boxplot by income group:
 ```{r}
 
 # Generate income group box plot
-n_income <- res %>%
+n_income <- res_no_missing_income %>%
   pull(income_group) %>%
   unique() %>%
   length()
 income_pal <- wes_palette("BottleRocket2", n_income, type = "discrete")
 
 # Generate income group box plot
-fig_income <- ggplot(res,
+fig_income <- ggplot(res_no_missing_income,
                      aes(x = income_group, y = delta, color = income_group)) +
   labs(x = "",
        y = "Change in coverage (reported - expected)") +
