@@ -477,10 +477,51 @@ stats_total <- res %>%
 tt_total <- tibble(stats_total, broom::tidy(ttest_total))
 tt_total
 
+# Save output
+write.csv(
+  tt_total,
+  here::here(csv_folder, "ttest_total.csv"),
+  row.names = FALSE)
+
+```
+
+We represent a corresponding scatterplot:
+
+```{r }
+
+fig_overall_results <- res %>% 
+  ggplot(aes(x = mean, y = coverage)) +
+  #geom_pointrange(alpha = .4, aes(xmin = lower_ci, xmax = upper_ci)) +
+  geom_point(alpha = .4, size = 3, aes(color = confident_95)) +
+  geom_abline(slope = 1, intercept = 0, linetype = 2) + 
+  scale_x_continuous(labels = unit_format(unit = "%", scale = 1e+2)) +
+  scale_y_continuous(labels = unit_format(unit = "%", scale = 1e+2)) +
+  scale_color_manual(guide = FALSE,
+                     values = c(`TRUE` = "black",
+                                `FALSE` = "#e63553")) +
+  labs(x = "Expected coverage in 2020",
+       y = "Actual coverage in 2020") +
+  theme_light() +
+  theme(plot.title = element_text(face = "bold", size = 20),
+        legend.position = "none",
+        axis.text = element_text(size = 14),
+        axis.title.y = element_text(angle = 90),
+        axis.title = element_text(size = 17)
+  )
+
+fig_overall_results
+
+# Save file
+ggsave(filename = here::here(fig_folder, "overall_results.png"),
+       plot = fig_overall_results, 
+       width = 15, height = 15, units = "cm")
+
 ```
 
 
-### ANOVA by region
+## Analyses by region
+
+Here we perform an ANOVA and associated boxplot by region.
 
 ```{r}
 
@@ -505,59 +546,14 @@ stats_regions <- res %>%
 tt_regions <- tibble(stats_regions, ttest_regions)
 tt_regions
 
-```
-
-
-## ANOVA by income
-
-```{r}
-
-# linear model
-lm_incomes <- lm(delta ~ -1 + income_group, data = res)
-
-# ANOVA
-anova(lm_incomes)
-
-# Tests on individual coefficients
-ttest_incomes <- lm_incomes %>%
-  summary() %>%
-  tidy()
-
-# Create readable output
-stats_incomes <- res %>%
-  group_by(income_group) %>%
-  summarise(reported = mean(coverage),
-            expected = mean(mean),
-            delta = mean(delta))
-
-tt_incomes <- tibble(stats_incomes, ttest_incomes)
-tt_incomes
+# Save output
+write.csv(
+  tt_regions,
+  here::here(csv_folder, "ttest_region.csv"),
+  row.names = FALSE)
 
 ```
 
-
-
-## ANOVA by region and income
-
-We check if deltas still differ by region after accounting for the effect of
-income.
-
-```{r}
-
-# linear model
-lm_region_incomes <- lm(delta ~ income_group + region, data = res)
-
-# ANOVA
-anova(lm_region_incomes)
-
-```
-
-
-
-
-
-
-#### Box plot for region
 
 ```{r}
 # Generate region box plot
@@ -590,6 +586,65 @@ ggsave(filename = here::here(fig_folder, "region_box_plot.png"),
        width = 30, height = 15, units = "cm")
 
 ```
+
+
+
+## ANOVA by income
+
+```{r}
+
+# linear model
+lm_incomes <- lm(delta ~ -1 + income_group, data = res)
+
+# ANOVA
+anova(lm_incomes)
+
+# Tests on individual coefficients
+ttest_incomes <- lm_incomes %>%
+  summary() %>%
+  tidy()
+
+# Create readable output
+stats_incomes <- res %>%
+  group_by(income_group) %>%
+  summarise(reported = mean(coverage),
+            expected = mean(mean),
+            delta = mean(delta))
+
+tt_incomes <- tibble(stats_incomes, ttest_incomes)
+tt_incomes
+
+# Save output
+write.csv(
+  tt_incomes,
+  here::here(csv_folder, "ttest_incomes.csv"),
+  row.names = FALSE)
+
+```
+
+
+
+## ANOVA by region and income
+
+We check if deltas still differ by region after accounting for the effect of
+income.
+
+```{r}
+
+# linear model
+lm_region_incomes <- lm(delta ~ income_group + region, data = res)
+
+# ANOVA
+anova(lm_region_incomes)
+
+```
+
+
+
+
+
+
+#### Box plot for region
 
 
 ### By income group
@@ -664,24 +719,12 @@ ggsave(filename = here::here(fig_folder, "income_box_plot.png"),
 
 ```
 
-#### Save t-test outputs
 
-```{r}
-# Save files
-write.csv(
-  tt_reg,
-  here::here(csv_folder, "ttest_region.csv"),
-  row.names = FALSE)
-write.csv(
-  tt_inc_grp,
-  here::here(csv_folder, "ttest_income.csv"),
-  row.names = FALSE)
-write.csv(
-  tt_total,
-  here::here(csv_folder, "ttest_total.csv"),
-  row.names = FALSE)
 
-```
+
+
+
+
 
 
 ## Outputs including missed immunisation quantification
