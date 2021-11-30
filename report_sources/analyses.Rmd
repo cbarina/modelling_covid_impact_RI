@@ -312,9 +312,9 @@ For option (3):
 
 ```{r}
 
-# Filter for countries with >5p.p. improvement
+# Filter out countries with >5p.p. improvement
 res <- res_all %>%
-  filter(delta > 0.05)
+  filter(delta <= 0.05)
 res
 
 ```
@@ -326,6 +326,7 @@ detailed with explanations in the Supplementary Materials.
 ## Remove countries identified as unreliable datapoints
 
 ```{r}
+
 # Default is to remove no countries
 removed_countries <- NULL
 
@@ -454,93 +455,57 @@ ggsave(filename = here::here(fig_folder, "forecast_large_pops.png"),
 # Investigating differences in coverage
 
 In this section we analyse the differences between reported and expected
-coverage, in general and across different strata.
+coverage, in general and across different strata. Note that making a pairwise
+t-test between the reported and expected coverage is identical to testing deltas
+against the null hypothesis that delta = 0. For simplicity, we do the
+latter. Simple ANOVAs will be used when comparing deltas across strata.
 
-## Conduct t-tests for predicted vs. observed coverage
-
-### t-test: For all countries combined
+## t-test for all countries combined
 
 ```{r}
 
 # Conduct t-test
-ttest_cov_drop <- t.test(cov_forecast_clean$actuals_2020,
-                         cov_forecast_clean$predicts_2020,
-                         paired = TRUE,
-                         alternative = "two.sided")
-
-# Calculate mean WUENIC-reported 2020 coverage and mean ARIMA-modelled 2020 coverage
-if (params$data == "dtp1") {
-  vax <- "dtp1"
-} else if (params$data == "dtp3") {
-  vax <- "dtp3"
-} else {
-  msg <- sprintf("Unknown dataset requested: %s", params$data)
-  stop(msg)
-}  
+ttest_total <- t.test(res$delta,
+                      alternative = "two.sided")
+ttest_total
 
 # Create readable output of t-test results
-total <- cov_forecast_clean %>%
-  filter(!is.na(actuals_2020)) %>%
-  dplyr::summarize(mean(actuals_2020), mean(predicts_2020)) %>%
-  mutate(vaccine = vax) %>%
-  rename(mean_expected = "mean(predicts_2020)",
-         mean_reported = "mean(actuals_2020)") %>%
-  dplyr::select(vaccine, mean_expected, mean_reported)
+stats_total <- res %>%
+  summarise(reported = mean(coverage),
+            expected = mean(mean))
 
-tt_total <- as.data.frame(do.call(cbind, ttest_cov_drop))
-tt_total = tt_total[-1,]
-tt_total %<>%
-  mutate(point_estimate = as.numeric(estimate),
-         conf_int = as.numeric(conf.int),
-         sample_size = as.numeric(parameter) + 1, 
-            # since parameter is degrees of freedom not sample size
-         p_value = as.numeric(p.value),
-         low_bound = as.numeric(estimate) + as.numeric(conf.int),
-         upper_bound = as.numeric(estimate) - as.numeric(conf.int),
-         vaccine = vax) %>%
-  left_join(total, by = "vaccine") %>%
-  dplyr::select(vaccine, sample_size, mean_expected, mean_reported, 
-                point_estimate, low_bound, upper_bound, p_value)
-
+tt_total <- tibble(stats_total, broom::tidy(ttest_total))
 tt_total
+
 ```
 
-### By region
+
+
+### ANOVA by region
 
 ```{r}
-# Conduct t-test
-ttest_region <- cov_forecast_clean %>%
-  filter(!is.na(actuals_2020)) %>%
-  group_by(un_region) %>% 
-  do(tidy(t.test(.$actuals_2020, 
-                 .$predicts_2020, 
-                 alt = "two.sided", 
-                 paired = TRUE)))
 
-# Calculate mean WUENIC-reported 2020 coverage and mean ARIMA-modelled 2020 coverage
-reg <- cov_forecast_clean %>%
-  filter(!is.na(actuals_2020)) %>%
-  group_by(un_region) %>%
-  dplyr::summarise(mean(actuals_2020), mean(predicts_2020)) %>%
-  mutate(vaccine = vax) %>%
-  rename(mean_expected = "mean(predicts_2020)",
-         mean_reported = "mean(actuals_2020)") %>%
-  dplyr::select(un_region, mean_expected, mean_reported)
+# linear model
+lm_regions <- lm(delta ~ -1 + region, data = res)
 
-# Create vector of key outputs from t-test
-tt_reg <- ttest_region %>%
-  dplyr::select(un_region, estimate, p.value, parameter, conf.low, conf.high) %>%
-  dplyr::rename(point_estimate = estimate,
-                p_value = p.value,
-                sample_size = parameter,
-                low_bound = conf.low,
-                upper_bound = conf.high) %>%
-  mutate(sample_size = (sample_size + 1)) %>% #since parameter is degrees of freedom not sample size
-  left_join(reg, by = "un_region") %>%
-  dplyr::select(un_region, sample_size, mean_expected, mean_reported,
-                point_estimate, low_bound, upper_bound, p_value)
+# ANOVA
+anova(lm_regions)
 
-tt_reg
+# Tests on individual coefficients
+ttest_regions <- lm_regions %>%
+  summary() %>%
+  tidy()
+
+# Create readable output
+stats_regions <- res %>%
+  group_by(region) %>%
+  summarise(reported = mean(coverage),
+            expected = mean(mean),
+            delta = mean(delta))
+
+tt_regions <- tibble(stats_regions, ttest_regions)
+tt_regions
+
 ```
 
 #### Box plot for region
