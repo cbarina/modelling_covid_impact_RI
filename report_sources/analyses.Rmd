@@ -691,16 +691,25 @@ anova(lm_region_incomes)
 
 <br>
 
-## Outputs including missed immunisation quantification
+# Estimating missed immunisation
 
-### Calculate missed immunisations
+In this section we estimate missed immunisation using UNWPP data, by applying
+the changes in coverage estimated to the current estimates of infant
+populations.
 
-- Import UNWPP data
-- Clean UNWPP data to calculate surviving infants in 2020 (target populations for DTP1 and DTP3 vaccination)
-- Calculation is: number of births - number of infants that die < age 1
+We will:
 
-#### Clean UNWPP data
+- clean UNWPP data
+- clean UNWPP data to calculate surviving infants in 2020 (target populations
+  for DTP1 and DTP3 vaccination)
+- estimate infant populations as: number of births - number of infants that die
+  < age 1
+
+
+## Clean UNWPP data
+
 ```{r}
+
 unwpp <- unwpp_raw %>% 
   rename(country = "Region, subregion, country or area *",
          country_code = "Country code",
@@ -709,78 +718,105 @@ unwpp <- unwpp_raw %>%
          year = "Reference date (1 January - 31 December)") %>%
   filter(Type == "Country/Area",
          year == 2020) %>%
-  dplyr::select(country, country_code, infant_deaths, births) %>%
+  select(country, country_code, infant_deaths, births) %>%
   mutate(births = as.numeric(str_replace_all(births," ", "")),
          infant_deaths = as.numeric(infant_deaths),
-         iso_code = countrycode(sourcevar = country_code, origin = "iso3n", destination = "iso3c"),
-         surviving_infants = (births-infant_deaths)*1000) %>%
+         iso_code = countrycode(sourcevar = country_code,
+                                origin = "iso3n",
+                                destination = "iso3c"),
+         surviving_infants = (births-infant_deaths) * 1000) %>%
   dplyr::select(iso_code, surviving_infants)
+
+unwpp
+
 ```
-#### Calculate missed immunisations
-- Multiply coverage delta estimates by surviving infant populations to calculate
-additional missed immunisations
+
+
+## Calculate missed immunisations
+
+- We multiply coverage delta estimates by surviving infant populations to
+calculate additional missed immunisations
 
 ```{r}
 
 # Calculate missed immunisations
-cov_forecast %<>%
+res_missed <- res %>% 
   left_join(unwpp, by = "iso_code") %>%
-  mutate(additional_missed = as.integer(surviving_infants * cov_delta_mean * -1),
-         additional_missed_low = as.integer(surviving_infants * cov_delta_low * -1),
-         additional_missed_high = as.integer(surviving_infants * cov_delta_high * -1),
-         expected_missed = as.integer((1 - predicts_2020) * surviving_infants),
-         total_missed = as.integer((1 - actuals_2020) * surviving_infants))
+  mutate(additional_missed = as.integer(surviving_infants * -delta),
+         additional_missed_low = as.integer(surviving_infants * -lower_delta),
+         additional_missed_high = as.integer(surviving_infants * -upper_delta ),
+         expected_missed = round((1 - mean) * surviving_infants),
+         total_missed = round((1 - coverage) * surviving_infants))
+res_missed
 
 ```
 
-### Create summary output table including % coverage delta and missed immunisations
+## Format output table
+
+We rename and reformat `res_missed` for an output to Excel:
+
 ```{r}
+
 # Create summary output in cleaned format
-summary_output <- cov_forecast %>%
-  mutate(actuals_2020 = percent(actuals_2020, accuracy = 0.1),
-         predicts_2020 = percent(predicts_2020, accuracy = 0.1),
-         cov_delta_mean = percent(cov_delta_mean,accuracy = 0.1)) %>%
-  dplyr::select(country, iso_code, region, un_region, income_group,
-                predicts_2020, predicts_lower,
-                predicts_upper, datapoint_removed, ci_width,
-                actuals_2020, cov_delta_mean, cov_delta_low, cov_delta_high,
-                confident_95, surviving_infants, total_missed, expected_missed, 
-                additional_missed, additional_missed_low, additional_missed_high) %>%
+summary_output <- res_missed %>%
+  mutate(coverage = percent(coverage, accuracy = 0.1),
+         mean = percent(mean, accuracy = 0.1),
+         delta = percent(delta, accuracy = 0.1)) %>%
+  dplyr::select(country, iso_code, region, region, income_group,
+                mean,
+                lower_ci, upper_ci, ci_width,
+                coverage, delta, lower_delta, upper_delta,
+                confident_95, surviving_infants,
+                total_missed, expected_missed, 
+                additional_missed,
+                additional_missed_low,
+                additional_missed_high) %>%
   rename(Country = country,
          "ISO code" = iso_code,
-         "UNICEF Region (unused)" = region,
-         "UN region" = un_region,
+         "UN region" = region,
          "Income group" = income_group,
-         "ARIMA modelled expected 2020 coverage (mean)" = predicts_2020,
-         "ARIMA modelled expected coverage (max 95% CI)" = predicts_lower,
-         "ARIMA modelled expected coverage (min 95% CI)" = predicts_upper,
+         "ARIMA modelled expected 2020 coverage (mean)" = mean,
+         "ARIMA modelled expected coverage (max 95% CI)" = lower_ci,
+         "ARIMA modelled expected coverage (min 95% CI)" = upper_ci,
          "ARIMA coverage 95% CI" = ci_width,
-         "WUENIC reported 2020 coverage" = actuals_2020,
-         "Coverage delta" = cov_delta_mean,
-         "Coverage delta (max 95% CI)" = cov_delta_low,
-         "Coverage delta (min 95% CI)" = cov_delta_high,
+         "WUENIC reported 2020 coverage" = coverage,
+         "Coverage delta" = delta,
+         "Coverage delta (max 95% CI)" = lower_delta,
+         "Coverage delta (min 95% CI)" = upper_delta,
          "95% confident actuals outside expected" = confident_95,
          "Surviving infants" = surviving_infants,
          "Additional missed immunisations (mean)" = additional_missed,
          "Additional missed immunisations (max 95% CI)" = additional_missed_high,
          "Additional missed immunisations (min 95% CI)" = additional_missed_low,
          "Expected missed children" = expected_missed,
-         "Total missed immunisations" = total_missed,
-         "ARIMA forecast unreliable" = datapoint_removed)
+         "Total missed immunisations" = total_missed)
 
 # Save file
 write.csv(
   summary_output,
   here::here(csv_folder, "summary_output.csv"),
   row.names = FALSE)
+
 ```
 
-### Generate table for manuscript
+
+
+<br>
+
+# Tables for manuscript
+
+In this section we generate various tables for the manuscript and supplementary
+material.
+
+## Table 1
+
+This table is included in the main text.
+
 ```{r}
-border_style = officer::fp_border(color="black", width=1)
+
+border_style <- officer::fp_border(color="black", width=1)
 
 table_output <- summary_output %>%
-  filter(`ARIMA forecast unreliable` == FALSE) %>%
   arrange(desc(`Additional missed immunisations (mean)`)) %>%
   head(10) %>%
     mutate(`ARIMA modelled expected 2020 coverage [95% CI]` = 
@@ -810,10 +846,11 @@ table_output
 
 save_as_docx("Modelled coverage declines and missed immunisations for 10 countries with greatest absolute increases in missed immunisations" = table_output, path = "../figures/top10_table.docx")
 save_as_image(table_output, path = "../figures/top10_table.png", webshot = "webshot")
+
 ```
 
 
-### Summary modelling output
+## ARIMA summary table
 
 Produce table showing order and fit of all ARIMA models per country
 
