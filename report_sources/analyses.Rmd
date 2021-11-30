@@ -128,10 +128,14 @@ Steps taken:
 ```{r}
 
 # Clean and reshape 2000-2020 coverage data
-data_raw %<>%
-  dplyr::rename(region = unicef_region, iso_code = iso3)
+data_clean <- data_raw %>% 
+  rename(iso_code = iso3) %>%
+  mutate(region = countrycode(iso_code,
+                              origin = "iso3c",
+                              destination = "un.region.name")) %>%
+  select(region, unicef_region, everything())
 
-data_long <- data_raw %>%
+data_long <- data_clean %>%
   pivot_longer(-(region:vaccine), names_to = "year", values_to = "coverage")
 names(data_long) <- tolower(names(data_long))
 data_long
@@ -485,7 +489,8 @@ write.csv(
 
 ```
 
-We represent a corresponding scatterplot:
+We represent a corresponding scatterplot. Red dots indicate countries for which
+the 95% CI of delta excludes zero.
 
 ```{r }
 
@@ -554,35 +559,39 @@ write.csv(
 
 ```
 
+We generate a boxplot by region:
 
 ```{r}
-# Generate region box plot
-region_pal <- wes_palette("Darjeeling1", 5, type = "discrete")
 
-region <- ggplot(cov_forecast_clean, aes(x = un_region, y = cov_delta_mean, color = un_region)) +
-  geom_boxplot(color = region_pal) +
-  geom_point(size = 2, position = position_jitter(width = 0.2)) +
+# Generate region box plot
+n_regions <- res %>%
+  pull(region) %>%
+  unique() %>%
+  length()
+region_pal <- wes_palette("Darjeeling1", n_regions, type = "discrete")
+
+fig_region <- ggplot(res,
+                 aes(x = region, y = delta, color = region)) +
+  geom_boxplot(aes(color = region)) +
+  geom_point(size = 2, position = position_jitter(width = 0.2), alpha = .5) +
   scale_colour_manual(values = region_pal) +
   stat_summary(fun = mean, geom = "point", shape = 4, size = 4, color = region_pal) +
   scale_y_continuous(labels = unit_format(unit = "%", scale = 1e+2)) +
-  labs(title = "Region: box plot of change in coverage by UN region",
-       x = "Region",
-       y = "Change in coverage (reported - expected)",
-       colour = "Region") +
+  labs(x = "",
+       y = "Change in coverage (reported - expected)") +
   theme_light() +
-  theme(plot.title = element_text(face = "bold", size = 20),
-        legend.position = "none",
+  theme(legend.position = "none",
         axis.text = element_text(size = 14),
         axis.title.y = element_text(angle = 90),
-        axis.title = element_text(size = 17)
-  ) +
+        axis.title = element_text(size = 17)) +
   scale_x_discrete(labels = wrap_format(12)) +
   geom_hline(aes(yintercept = 0), linetype = "dashed", colour = "black", size = 1)
-region
+
+fig_region
 
 # Save file
 ggsave(filename = here::here(fig_folder, "region_box_plot.png"),
-       plot = region, 
+       plot = fig_region, 
        width = 30, height = 15, units = "cm")
 
 ```
@@ -590,6 +599,8 @@ ggsave(filename = here::here(fig_folder, "region_box_plot.png"),
 
 
 ## ANOVA by income
+
+Here we perform an ANOVA and associated boxplot by income group.
 
 ```{r}
 
@@ -622,6 +633,43 @@ write.csv(
 
 ```
 
+We generate a boxplot by income group:
+
+```{r}
+
+# Generate income group box plot
+n_income <- res %>%
+  pull(income_group) %>%
+  unique() %>%
+  length()
+income_pal <- wes_palette("BottleRocket2", n_income, type = "discrete")
+
+# Generate income group box plot
+fig_income <- ggplot(res,
+                     aes(x = income_group, y = delta, color = income_group)) +
+  labs(x = "",
+       y = "Change in coverage (reported - expected)") +
+  scale_y_continuous(labels = unit_format(unit = "%", scale = 1e+2)) +
+  geom_boxplot() +
+  geom_point(size = 2, position = position_jitter(width = 0.2), alpha = .5) +
+  scale_colour_manual(guide = FALSE, values = income_pal) +
+  stat_summary(fun = mean, geom = "point", shape = 4, size = 4, color = income_pal) +
+  theme_light() +
+    theme(legend.position = "none",
+        axis.text = element_text(size = 14),
+        axis.title.y = element_text(angle = 90),
+        axis.title = element_text(size = 17)) +
+  geom_hline(aes(yintercept = 0), linetype = "dashed", colour = "black", size = 1)
+
+fig_income
+
+# Save file
+ggsave(filename = here::here(fig_folder, "income_box_plot.png"),
+       plot = income_box, 
+       width = 30, height = 15, units = "cm")
+
+```
+
 
 
 ## ANOVA by region and income
@@ -641,91 +689,7 @@ anova(lm_region_incomes)
 
 
 
-
-
-
-#### Box plot for region
-
-
-### By income group
-
-```{r}
-# Conduct t-test
-ttest_income_group <- cov_forecast_clean %>%
-  filter(!is.na(actuals_2020)) %>%
-  filter(iso_code != "VEN") %>%
-  group_by(income_group) %>% 
-  do(tidy(t.test(.$actuals_2020, 
-                 .$predicts_2020, 
-                 alt = "two.sided", 
-                 paired = TRUE)))
-
-# Calculate mean WUENIC-reported 2020 coverage and mean ARIMA-modelled 2020 coverage
-inc_grp <- cov_forecast_clean %>%
-  filter(!is.na(actuals_2020)) %>%
-  group_by(income_group) %>%
-  dplyr::summarize(mean(actuals_2020), mean(predicts_2020)) %>%
-  mutate(vaccine = vax) %>%
-  rename(mean_expected = "mean(predicts_2020)",
-         mean_reported = "mean(actuals_2020)") %>%
-  dplyr::select(income_group, mean_expected, mean_reported)
-
-# Create vector of key outputs from t-test
-tt_inc_grp <- ttest_income_group %>%
-  dplyr::select(income_group, estimate, p.value, parameter, conf.low, conf.high) %>%
-  dplyr::rename(point_estimate = estimate,
-                p_value = p.value,
-                sample_size = parameter,
-                low_bound = conf.low,
-                upper_bound = conf.high) %>%
-  mutate(sample_size = (sample_size+1)) %>% #since parameter is degrees of freedom not sample size
-  left_join(inc_grp, by = "income_group") %>%
-  dplyr::select(income_group, sample_size, mean_expected, mean_reported,
-                point_estimate, low_bound, upper_bound, p_value)
-
-tt_inc_grp
-```
-
-```{r}
-# Generate income group box plot
-income_dat <- cov_forecast_clean %>%
-  filter(iso_code != "VEN")   #remove Venezuela since has no income group
-
-income_pal <- wes_palette("BottleRocket2", 4, type = "discrete")
-
-income_box <- ggplot(income_dat, aes(x = income_group, y = cov_delta_mean, color = income_group)) +
-  labs(title = "Income group: box plot of change in coverage by income group",
-       x = "Income group",
-       y = "Change in coverage (reported - expected)",
-       colour = "Income group") +
-  scale_y_continuous(labels = unit_format(unit = "%", scale = 1e+2)) +
-  geom_boxplot(colour = income_pal) +
-  geom_point(size = 2, position = position_jitter(width = 0.2)) +
-  scale_colour_manual(values = income_pal) +
-  stat_summary(fun = mean, geom = "point", shape = 4, size = 4, color = income_pal) +
-  theme_light() +
-  theme(plot.title = element_text(face = "bold", size = 20),
-        legend.position = "none",
-        axis.text = element_text(size = 16),
-        axis.title.y = element_text(angle = 90),
-        axis.title = element_text(size = 18)) +
-  geom_hline(aes(yintercept = 0), linetype = "dashed", colour = "black", size = 1)
-income_box
-
-# Save file
-ggsave(filename = here::here(fig_folder, "income_box_plot.png"),
-       plot = income_box, 
-       width = 30, height = 15, units = "cm")
-
-```
-
-
-
-
-
-
-
-
+<br>
 
 ## Outputs including missed immunisation quantification
 
