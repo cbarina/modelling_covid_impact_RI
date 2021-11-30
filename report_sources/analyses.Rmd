@@ -480,7 +480,6 @@ tt_total
 ```
 
 
-
 ### ANOVA by region
 
 ```{r}
@@ -507,6 +506,56 @@ tt_regions <- tibble(stats_regions, ttest_regions)
 tt_regions
 
 ```
+
+
+## ANOVA by income
+
+```{r}
+
+# linear model
+lm_incomes <- lm(delta ~ -1 + income_group, data = res)
+
+# ANOVA
+anova(lm_incomes)
+
+# Tests on individual coefficients
+ttest_incomes <- lm_incomes %>%
+  summary() %>%
+  tidy()
+
+# Create readable output
+stats_incomes <- res %>%
+  group_by(income_group) %>%
+  summarise(reported = mean(coverage),
+            expected = mean(mean),
+            delta = mean(delta))
+
+tt_incomes <- tibble(stats_incomes, ttest_incomes)
+tt_incomes
+
+```
+
+
+
+## ANOVA by region and income
+
+We check if deltas still differ by region after accounting for the effect of
+income.
+
+```{r}
+
+# linear model
+lm_region_incomes <- lm(delta ~ income_group + region, data = res)
+
+# ANOVA
+anova(lm_region_incomes)
+
+```
+
+
+
+
+
 
 #### Box plot for region
 
