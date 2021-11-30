@@ -360,18 +360,10 @@ res <- res %>%
 
 ```{r, results = "hide", fig.keep = 1, fig.width = 10, fig.height = 10, out.width = "100%"}
 
-# Select data for relevant removed countries
-
-# Plot data
-removed_vis <- res_removed_countries %>%
-  ggplot(aes(x = year(year), y = coverage)) +
-  geom_point() +
-  geom_smooth(colour = "darkgrey") +
-
-
-# Generate plot
+# Define color for model
 arima_color <- "#ac3973"
 
+# Generate plot
 fig_removed_countries <- x_removed_countries %>%
   ggplot(aes(x = year, y = coverage)) +
   theme_bw() +
@@ -380,7 +372,8 @@ fig_removed_countries <- x_removed_countries %>%
   geom_errorbar(data = res_removed_countries,
                 aes(ymin = lower_ci, ymax = upper_ci),
                 color = arima_color) +
-  geom_point(data = res_large, aes(y = mean), shape = 3, color = arima_color) +
+  geom_point(data = res_removed_countries,
+             aes(y = mean), shape = 3, color = arima_color) +
   facet_wrap(~ country, scales = "free_y",
              labeller = label_wrap_gen(25)) +
   scale_y_continuous(labels = scales::percent_format(accuracy = 1L), 
@@ -397,7 +390,7 @@ fig_removed_countries <- x_removed_countries %>%
 fig_removed_countries
 
 # Save file
-ggsave(filename = here::here(fig_folder, "removed_countries.png"),
+ggsave(filename = here::here(fig_folder, "forecast_removed_countries.png"),
        plot = fig_removed_countries, 
        width = 30, height = 30, units = "cm")
 
@@ -446,7 +439,7 @@ fig_large_pops <- ggplot(data = x_large, aes(x = year, y = coverage)) +
 fig_large_pops
 
 # Save file 
-ggsave(filename = here::here(fig_folder, "forecast_pop.png"),
+ggsave(filename = here::here(fig_folder, "forecast_large_pops.png"),
        plot = fig_large_pops, 
        width = 30, height = 10, units = "cm")
 
@@ -499,7 +492,7 @@ tt_total = tt_total[-1,]
 tt_total %<>%
   mutate(point_estimate = as.numeric(estimate),
          conf_int = as.numeric(conf.int),
-         sample_size = as.numeric(parameter)+1, 
+         sample_size = as.numeric(parameter) + 1, 
             # since parameter is degrees of freedom not sample size
          p_value = as.numeric(p.value),
          low_bound = as.numeric(estimate) + as.numeric(conf.int),
