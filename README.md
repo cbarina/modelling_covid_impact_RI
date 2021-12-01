@@ -77,3 +77,8 @@ reportfactory::compile_reports("analyses.Rmd",
 Most outputs, including compiled versions of the analysis reports in *html*,
 will be stored in the *outputs/* folder. Figures will be stored in the *figures*
 folder.
+
+
+## Licensing
+Copyright: Beth Evans 2021
+License: [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/)
