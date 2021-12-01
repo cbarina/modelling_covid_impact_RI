@@ -1,7 +1,7 @@
 ---
 title: "Analyses for COVID-19 impact on Routine Immunisation in 2021"
 author: "Beth Evans and Thibaut Jombart"
-date: "30 Nov 2021"
+date: "1 Dec 2021"
 output: 
   html_document:
     code_folding: "show"
@@ -367,7 +367,7 @@ res <- res %>%
 
 #### Plot of removed datapoints
 
-```{r, results = "hide", fig.keep = 1, fig.width = 10, fig.height = 10, out.width = "100%"}
+```{r fig_removed_countries, results = "hide", fig.keep = 1, fig.width = 10, fig.height = 10, out.width = "100%"}
 
 # Define color for model
 arima_color <- "#ac3973"
@@ -513,7 +513,7 @@ fig_overall_results <- res %>%
   theme_light() +
   theme(plot.title = element_text(face = "bold", size = 20),
         legend.position = "none",
-        axis.text = element_text(size = 14),
+        axis.text = element_text(size = 12),
         axis.title.y = element_text(angle = 90),
         axis.title = element_text(size = 17)
   )
@@ -617,7 +617,8 @@ Here we perform an ANOVA and associated boxplot by income group.
 
 # remove countries with no income group
 res_no_missing_income <- res %>%
-  filter(income_group != "")
+  filter(income_group != "") %>%
+  droplevels()
 
 # linear model
 lm_income <- lm(delta ~ -1 + income_group,
@@ -702,17 +703,29 @@ income.
 
 ```{r}
 
+# check link between income group and region using simulated Chi-square
+table(
+  res_no_missing_income$income_group,
+  res_no_missing_income$region) %>%
+  chisq.test(simulate.p.value = TRUE, B = 1e5)
+
 # effect of region after accounting for income
-lm_income_region <- lm(delta ~ income_group + region, data = res)
+lm_income_region <- lm(delta ~ income_group + region,
+                       data = res_no_missing_income)
 
 # ANOVA
 anova(lm_income_region, lm_income)
 
 # effect of income after accounting for region
-lm_region_income <- lm(delta ~ region + income_group, data = res)
+lm_region_income <- lm(delta ~ region + income_group,
+                       data = res_no_missing_income)
 
 # ANOVA
-anova(lm_region_income, lm_region)
+# note: we need to re-fit a model with region effect with the same dataset used
+# for income to ensure models are comparable
+lm_region_comparable <- lm(delta ~ -1 + region,
+                           data = res_no_missing_income)
+anova(lm_region_income, lm_region_comparable)
 
 
 ```
