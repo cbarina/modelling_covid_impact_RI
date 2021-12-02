@@ -712,21 +712,21 @@ table(
 # effect of region after accounting for income
 lm_income_region <- lm(delta ~ income_group + region,
                        data = res_no_missing_income)
-
 # ANOVA
-anova(lm_income_region, lm_income)
+anova(
+  update(lm_income_region, . ~ . -region), # ~ income
+  lm_income_region # ~ income + region
+  )
 
 # effect of income after accounting for region
 lm_region_income <- lm(delta ~ region + income_group,
                        data = res_no_missing_income)
 
 # ANOVA
-# note: we need to re-fit a model with region effect with the same dataset used
-# for income to ensure models are comparable
-lm_region_comparable <- lm(delta ~ -1 + region,
-                           data = res_no_missing_income)
-anova(lm_region_income, lm_region_comparable)
-
+anova(
+  update(lm_region_income, . ~ . -income_group), # ~ region
+  lm_region_income # ~ region + income
+  )
 
 ```
 
