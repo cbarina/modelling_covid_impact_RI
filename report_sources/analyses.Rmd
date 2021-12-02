@@ -1,5 +1,5 @@
 ---
-title: "Analyses for COVID-19 impact on Routine Immunisation in 2021"
+title: "Analyses for COVID-19 impact on Routine Immunisation in 2020"
 author: "Beth Evans and Thibaut Jombart"
 date: "1 Dec 2021"
 output: 
@@ -13,7 +13,7 @@ output:
     highlight: pygments
     theme: spacelab
 params:
-  data: "dtp3"
+  data: "dtp1"
 ---
 
 ```{r setup, include=FALSE}
@@ -44,6 +44,7 @@ library(here)
 library(flextable)
 library(webshot)
 library(wesanderson)
+library(cowplot)
 
 ```
 
@@ -287,7 +288,7 @@ res_all <- forecasts %>%
   mutate(delta = coverage - mean,
          lower_delta = coverage - lower_ci,
          upper_delta = coverage - upper_ci,
-         confident_95 = (coverage > lower_ci) & (coverage < upper_ci),
+         within_ci = (coverage >= lower_ci) & (coverage <= upper_ci),
          ci_width = upper_ci - lower_ci
          )
 
@@ -348,12 +349,12 @@ if (params$data == "dtp1") {
 # Removed countries for DTP3
 if (params$data == "dtp3") {
   removed_countries <- c("Haiti", "Libya", "Samoa", "Solomon Islands", "Brazil",
-                         "El Salvador", "Jordan",
+                         "El Salvador", "Jordan", "Malawi",
                          "Venezuela (Bolivarian Republic of)", "Suriname")
 }
 
 # Keep track of removed countries
-res_removed_countries <- res %>%
+res_removed_countries <- res_all %>%
   dplyr::filter(country %in% removed_countries)
 x_removed_countries <- x %>%
   dplyr::filter(country %in% removed_countries)
@@ -415,7 +416,7 @@ example of reported coverage values vs ARIMA model prediction.
 ```{r fig_large_pops, out.width = "100%", fig.width = 10, fig.height = 3}
 
 # Select countries for inclusion in plot
-large_pops <- c("China", "India", "Pakistan", "Nigeria")
+large_pops <- c("India", "Pakistan", "Indonesia", "Philippines", "Mexico")
 
 x_large <- x %>%
   filter(country %in% large_pops)
@@ -500,8 +501,8 @@ the 95% CI of delta excludes zero.
 
 fig_overall_results <- res %>% 
   ggplot(aes(x = mean, y = coverage)) +
-  geom_pointrange(alpha = .4, aes(xmin = lower_ci, xmax = upper_ci, color = confident_95)) +
-  #geom_point(alpha = .4, size = 3, aes(color = confident_95)) +
+  geom_pointrange(alpha = .4, aes(xmin = lower_ci, xmax = upper_ci, color = within_ci)) +
+  #geom_point(alpha = .4, size = 3, aes(color = within_ci)) +
   geom_abline(slope = 1, intercept = 0, linetype = 2) + 
   scale_x_continuous(labels = unit_format(unit = "%", scale = 1e+2)) +
   scale_y_continuous(labels = unit_format(unit = "%", scale = 1e+2)) +
@@ -541,6 +542,8 @@ lm_region <- lm(delta ~ -1 + region, data = res)
 anova(lm_region)
 
 # Tests on individual coefficients
+lm_region %>%
+  summary()
 ttest_regions <- lm_region %>%
   summary() %>%
   tidy()
@@ -628,6 +631,8 @@ lm_income <- lm(delta ~ -1 + income_group,
 anova(lm_income)
 
 # Tests on individual coefficients
+lm_income %>%
+  summary()
 ttest_incomes <- lm_income %>%
   summary() %>%
   tidy()
@@ -694,8 +699,6 @@ ggsave(filename = here::here(fig_folder, "income_box_plot.png"),
 
 ```
 
-
-
 ## ANOVA by region and income
 
 We check if deltas still differ by region after accounting for the effect of
@@ -718,6 +721,8 @@ anova(
   lm_income_region # ~ income + region
   )
 
+
+
 # effect of income after accounting for region
 lm_region_income <- lm(delta ~ region + income_group,
                        data = res_no_missing_income)
@@ -728,6 +733,17 @@ anova(
   lm_region_income # ~ region + income
   )
 
+```
+We generate manuscript figure illustrating income and region trends adjacent:
+
+```{r}
+heterogeneity_fig <- plot_grid(fig_region, fig_income,
+                    labels = c("A", "B"))
+heterogeneity_fig
+
+ggsave(filename = here::here(fig_folder, "heterogeneity_fig.png"),
+       plot = heterogeneity_fig, 
+       width = 30, height = 15, units = "cm")
 ```
 
 
@@ -809,7 +825,7 @@ summary_output <- res_missed %>%
                 mean,
                 lower_ci, upper_ci, ci_width,
                 coverage, delta, lower_delta, upper_delta,
-                confident_95, surviving_infants,
+                within_ci, surviving_infants,
                 total_missed, expected_missed, 
                 additional_missed,
                 additional_missed_low,
@@ -819,14 +835,14 @@ summary_output <- res_missed %>%
          "UN region" = region,
          "Income group" = income_group,
          "ARIMA modelled expected 2020 coverage (mean)" = mean,
-         "ARIMA modelled expected coverage (max 95% CI)" = lower_ci,
-         "ARIMA modelled expected coverage (min 95% CI)" = upper_ci,
+         "ARIMA modelled expected coverage (min 95% CI)" = lower_ci,
+         "ARIMA modelled expected coverage (max 95% CI)" = upper_ci,
          "ARIMA coverage 95% CI" = ci_width,
          "WUENIC reported 2020 coverage" = coverage,
-         "Coverage delta" = delta,
-         "Coverage delta (max 95% CI)" = lower_delta,
-         "Coverage delta (min 95% CI)" = upper_delta,
-         "95% confident actuals outside expected" = confident_95,
+         "Delta (expected - reported, mean)" = delta,
+         "Delta (expected - reported, min 95% CI)" = lower_delta,
+         "Delta (expected - reported, max 95% CI)" = upper_delta,
+         "WUENIC-reported coverage within ARIMA-predicted 95% CI" = within_ci,
          "Surviving infants" = surviving_infants,
          "Additional missed immunisations (mean)" = additional_missed,
          "Additional missed immunisations (max 95% CI)" = additional_missed_high,
@@ -869,7 +885,7 @@ table_output <- summary_output %>%
                  ,"; ",percent(as.numeric(`ARIMA modelled expected coverage (min 95% CI)`), 
                                accuracy = 0.1),"]",
                  sep = "")) %>%
-    rename(`Change in coverage (mean)` = `Coverage delta`) %>%
+    rename(`Change in coverage (mean)` = `Delta (expected - reported, mean)`) %>%
   select(Country, `ISO code`, `UN region`, `Income group`,
          `ARIMA modelled expected 2020 coverage [95% CI]`, `WUENIC reported 2020 coverage`,
          `Change in coverage (mean)`, `Total missed immunisations`,
