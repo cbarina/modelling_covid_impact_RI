@@ -322,15 +322,20 @@ For option (3):
 ```{r}
 
 # Filter out countries with >5p.p. improvement
-res <- res_all %>%
-  filter(delta <= 0.05)
-res
+improve <- data_clean %>%
+  select(iso_code, `2019`) %>%
+  left_join(res_all, by = "iso_code") %>%
+  mutate(improvement = mean-`2019`/100) %>%
+  filter(improvement >= 0.05)
+improve
 
+res <- res_all %>%
+  filter(!country %in% improve$country)
+res
 ```
 
 Countries considered as potential unreliable estimated coverage estimates are
 detailed with explanations in the Supplementary Materials.
-
 
 ## Remove countries identified as unreliable datapoints
 
@@ -349,7 +354,7 @@ if (params$data == "dtp1") {
 # Removed countries for DTP3
 if (params$data == "dtp3") {
   removed_countries <- c("Haiti", "Libya", "Samoa", "Solomon Islands", "Brazil",
-                         "El Salvador", "Jordan", "Malawi",
+                         "El Salvador", "Jordan", 
                          "Venezuela (Bolivarian Republic of)", "Suriname")
 }
 
@@ -880,9 +885,9 @@ table_output <- summary_output %>%
   head(10) %>%
     mutate(`ARIMA modelled expected 2020 coverage [95% CI]` = 
            paste(`ARIMA modelled expected 2020 coverage (mean)`,
-                 " [",percent(as.numeric(`ARIMA modelled expected coverage (max 95% CI)`), 
+                 " [",percent(as.numeric(`ARIMA modelled expected coverage (min 95% CI)`), 
                               accuracy = 0.1)
-                 ,"; ",percent(as.numeric(`ARIMA modelled expected coverage (min 95% CI)`), 
+                 ,"; ",percent(as.numeric(`ARIMA modelled expected coverage (max 95% CI)`), 
                                accuracy = 0.1),"]",
                  sep = "")) %>%
     rename(`Change in coverage (mean)` = `Delta (expected - reported, mean)`) %>%
@@ -904,8 +909,6 @@ table_output <- summary_output %>%
 table_output
 
 save_as_docx("Modelled coverage declines and missed immunisations for 10 countries with greatest absolute increases in missed immunisations" = table_output, path = "../figures/top10_table.docx")
-save_as_image(table_output, path = "../figures/top10_table.png", webshot = "webshot")
-
 ```
 
 
