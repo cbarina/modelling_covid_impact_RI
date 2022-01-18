@@ -13,7 +13,7 @@ output:
     highlight: pygments
     theme: spacelab
 params:
-  data: "dtp1"
+  data: "mcv1"
 ---
 
 ```{r setup, include=FALSE}
@@ -58,12 +58,13 @@ Import data:
   (UN WPP)
 
 ```{r}
-# Set-up toggle to pull DTP1 and DTP3 data respectively when compiling for the
-# appropriate antigen
+# Set-up toggle to pull DTP1, DTP3, and MCV1 data respectively when compiling for the appropriate antigen
 if (params$data == "dtp1") {
   file_path <- here::here("data", "dtp1_oct.csv")
 } else if (params$data == "dtp3") {
   file_path <- here::here("data", "dtp3_oct.csv")
+} else if (params$data == "mcv1") {
+  file_path <- here::here("data", "mcv1_oct.csv") 
 } else {
   msg <- sprintf("Unknown dataset requested: %s", params$data)
   stop(msg)
@@ -294,6 +295,117 @@ res_all <- forecasts %>%
 
 ```
 
+## Sensitivity analysis - conduct analysis on all countries with no exceptions
+
+### T-test for all countries combined
+Here we perform a T-test on all countries with sufficient reporting data (2020 + complete timeseries from 2000-2019) prior to removing any countries from analysis as unreliable datapoints. These results are reported in the Supplementary Materials as a sensitivity analysis.
+```{r}
+# Conduct t-test
+ttest_total_sens <- t.test(res_all$delta,
+                      alternative = "two.sided")
+ttest_total_sens
+
+# Create readable output of t-test results
+stats_total_sens <- res_all %>%
+  summarise(reported = mean(coverage),
+            expected = mean(mean))
+
+tt_total_sens <- tibble(stats_total_sens, broom::tidy(ttest_total_sens))
+tt_total_sens
+
+# Save output
+write.csv(
+  tt_total_sens,
+  here::here(csv_folder, "ttest_total_sensitivity.csv"),
+  row.names = FALSE)
+```
+### T-test by region
+Here we perform an ANOVA by region, prior to removing any countries from analysis as unreliable datapoints. These results are reported in the Supplementary Materials as a sensitivity analysis.
+```{r}
+# linear model
+lm_region_sens <- lm(delta ~ -1 + region, data = res_all)
+
+# ANOVA
+anova(lm_region_sens)
+
+# Tests on individual coefficients
+lm_region_sens %>%
+  summary()
+ttest_regions_sens <- lm_region_sens %>%
+  summary() %>%
+  tidy()
+
+# Create readable output
+stats_regions_sens <- res_all %>%
+  group_by(region) %>%
+  summarise(reported = mean(coverage),
+            expected = mean(mean),
+            delta = mean(delta))
+
+# Confidence intervals (95%)
+ci_regions_sens <- lm_region_sens %>%
+  confint() %>%
+  as.data.frame() %>%
+  setNames(c("lower_ci", "upper_ci")) %>%
+  tibble()
+
+tt_regions_sens <- tibble(stats_regions_sens, ci_regions_sens, ttest_regions_sens)
+tt_regions_sens
+
+# Save output
+write.csv(
+  tt_regions_sens,
+  here::here(csv_folder, "ttest_region_sensitivity.csv"),
+  row.names = FALSE)
+```
+
+### T-test by income group
+Here we perform an ANOVA by income group, prior to removing any countries from analysis as unreliable datapoints. We remove countries with no income group reported by World Bank (Venezuela). These results are reported in the Supplementary Materials as a sensitivity analysis.
+```{r}
+# remove countries with no income group
+res_no_missing_income_sens <- res_all %>%
+  filter(income_group != "") %>%
+  droplevels()
+
+# linear model
+lm_income_sens <- lm(delta ~ -1 + income_group,
+                  data = res_no_missing_income_sens)
+
+# ANOVA
+anova(lm_income_sens)
+
+# Tests on individual coefficients
+lm_income_sens %>%
+  summary()
+ttest_incomes_sens <- lm_income_sens %>%
+  summary() %>%
+  tidy()
+
+# Create readable output
+stats_incomes_sens <- res_no_missing_income_sens %>%
+  group_by(income_group) %>%
+  summarise(reported = mean(coverage),
+            expected = mean(mean),
+            delta = mean(delta))
+
+# Confidence intervals (95%)
+ci_incomes_sens <- lm_income_sens %>%
+  confint() %>%
+  as.data.frame() %>%
+  setNames(c("lower_ci", "upper_ci")) %>%
+  tibble()
+
+tt_incomes_sens <- tibble(stats_incomes_sens, ci_incomes_sens, ttest_incomes_sens)
+tt_incomes_sens
+
+# Save output
+write.csv(
+  tt_incomes_sens,
+  here::here(csv_folder, "ttest_incomes_sensitivity.csv"),
+  row.names = FALSE)
+
+```
+
 
 ## Remove unreliable expected coverage estimates
 
@@ -356,6 +468,13 @@ if (params$data == "dtp3") {
   removed_countries <- c("Haiti", "Libya", "Samoa", "Solomon Islands", "Brazil",
                          "El Salvador", "Jordan", 
                          "Venezuela (Bolivarian Republic of)", "Suriname")
+}
+
+# Removed countries for MCV1
+if (params$data == "mcv1") {
+  removed_countries <- c("Haiti", "Libya", "Samoa", "Solomon Islands",
+                         "Bolivia (Plurinational State of)", "Jordan", 
+                         "Bahamas", "Suriname")
 }
 
 # Keep track of removed countries
