@@ -56,9 +56,9 @@ book-keeping, we recommend using the *reportfactory* function
 `compile_reports()`, after opening the Rstudio session by double-clicking on
 *analyses.Rproj*.
 
-A single report is used to perform all the analyses. It can use DTP1 or DTP3
+A single report is used to perform all the analyses. It can use DTP1, DTP3, or MCV1
 data depending on the value of the parameter *data*, which can be specified as
-shown below:
+shown below (default: DTP3):
 
 ```r
 
@@ -71,6 +71,11 @@ reportfactory::compile_reports("analyses.Rmd",
 reportfactory::compile_reports("analyses.Rmd",
                                params = list(data = "dtp3"),
                                subfolder = "dtp3")
+
+# MCV1
+reportfactory::compile_reports("analyses.Rmd",
+                               params = list(data = "mcv1"),
+                               subfolder = "mcv1")
 
 ```
 

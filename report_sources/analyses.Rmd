@@ -13,7 +13,7 @@ output:
     highlight: pygments
     theme: spacelab
 params:
-  data: "mcv1"
+  data: "dtp3"
 ---
 
 ```{r setup, include=FALSE}
