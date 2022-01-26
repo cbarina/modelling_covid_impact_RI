@@ -1,1 +1,2 @@
 *.Rmd linguist-detectable=True
+*.eps linguist-detectable=False
